@@ -1,23 +1,11 @@
-# TRUST
+# trubo
 
-TRUST is a retro TUI text editor inspired by classic blue-screen DOS tools.
+trubo is a retro TUI text editor inspired by classic blue-screen DOS tools.
 
 Status: experimental nostalgia project. It edits text files, browses
 directories, and keeps the UI intentionally loud.
 
-## Screenshots
-
-Browsing and editing files in TRUST.
-
-| Starting a project | Running a console program |
-| --- | --- |
-| ![Hello project in TRUST](doc/1_hello.png) | ![Hello project editor view](doc/2_hello.png) |
-
-TRUST can edit TRUST.
-
-| TRUST Editor | Running Tests |
-| --- | --- |
-| ![TRUST project in TRUST](doc/3_trust.png) | ![TRUST menus and panes](doc/4_trust.png) |
+It's based on TRUST from which this was forked.
 
 ## FAQ
 
@@ -25,10 +13,10 @@ TRUST can edit TRUST.
 Because Rust deserves a blue-screen IDE from the olden days and someone had to do this.
 
 **Does it save my files?**  
-Yes. Use `F2` or `Ctrl+S`. TRUST marks dirty buffers with `*` in the editor title. Still, this is more of a fun project so use at your own risk.
+Yes. Use `F2` or `Ctrl+S`. trubo marks dirty buffers with `*` in the editor title. Still, this is more of a fun project so use at your own risk.
 
 **Is this affiliated with any classic DOS IDE vendor?**  
-No. TRUST is an independent nostalgia project inspired by classic DOS development environments.
+No. trubo is an independent nostalgia project inspired by classic DOS development environments.
 
 ## Run
 
@@ -36,8 +24,8 @@ No. TRUST is an independent nostalgia project inspired by classic DOS developmen
 cargo run -- /path/to/file-or-directory
 ```
 
-If no path is supplied, TRUST opens the current directory. If a file path is
-supplied, TRUST opens that file directly and uses its parent directory for the
+If no path is supplied, trubo opens the current directory. If a file path is
+supplied, trubo opens that file directly and uses its parent directory for the
 browser pane.
 
 ## Keys
@@ -75,5 +63,5 @@ browser pane.
 - Drag the vertical divider between the browser and editor panes to resize them.
 - Scroll inside the browser or editor pane to move through content.
 
-The file pane lists directories and all regular files. TRUST opens files as
+The file pane lists directories and all regular files. trubo opens files as
 text regardless of extension.

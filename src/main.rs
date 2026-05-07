@@ -35,7 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     if !io::stdout().is_terminal() {
-        return Err("TRUST must be run in an interactive terminal".into());
+        return Err("trubo must be run in an interactive terminal".into());
     }
 
     let target = target.canonicalize().unwrap_or(target);
@@ -56,7 +56,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     restore_terminal(&mut terminal)?;
 
     if let Err(error) = result {
-        eprintln!("trust: {error}");
+        eprintln!("trubo: {error}");
         std::process::exit(1);
     }
 
@@ -75,7 +75,7 @@ fn parse_args() -> Result<Startup, Box<dyn std::error::Error>> {
         [] => Ok(Startup::Open(env::current_dir()?)),
         [flag] if is_help_flag(flag) => Ok(Startup::Help),
         [path] => Ok(Startup::Open(PathBuf::from(path))),
-        _ => Err("usage: trust [FILE_OR_DIRECTORY]".into()),
+        _ => Err("usage: trubo [FILE_OR_DIRECTORY]".into()),
     }
 }
 
@@ -84,12 +84,14 @@ fn is_help_flag(value: &OsString) -> bool {
 }
 
 fn print_usage() {
-    println!("TRUST - retro DOS-style terminal text editor");
+    println!("trubo - retro DOS-style terminal text editor");
     println!();
     println!("Usage:");
-    println!("  trust [FILE_OR_DIRECTORY]");
+    println!("  trubo [FILE_OR_DIRECTORY]");
     println!();
-    println!("Keys: F1 Help, F2 Save, F3 Open, F4 Focus, F5 Run, F9 Build, Ctrl+Q Quit");
+    println!(
+        "Keys: F1 Help, F2 Save, F3 Open, F4 Focus, F5 Run, Ctrl+Space Select, F9 Build, Ctrl+Q Quit"
+    );
 }
 
 fn setup_terminal() -> io::Result<TerminalUi> {
@@ -161,11 +163,17 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
         return app.handle_menu_key(key);
     }
 
+    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char(' ') {
+        app.toggle_selection_mode();
+        return Action::None;
+    }
+
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
             KeyCode::Char('c') | KeyCode::Char('C') => app.copy_selection(),
             KeyCode::Char('x') | KeyCode::Char('X') => app.cut_selection(),
             KeyCode::Char('v') | KeyCode::Char('V') => app.paste_from_clipboard(),
+            KeyCode::Insert => app.copy_selection(),
             KeyCode::Char('s') | KeyCode::Char('S') => app.save_current(),
             KeyCode::Char('f') | KeyCode::Char('F') => app.toggle_focus(),
             KeyCode::Char('o') | KeyCode::Char('O') => app.open_selected_file(),
@@ -180,6 +188,8 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
         KeyCode::Esc => {
             return Action::Quit;
         }
+        KeyCode::Insert if key.modifiers.contains(KeyModifiers::SHIFT) => app.paste_from_clipboard(),
+        KeyCode::Delete if key.modifiers.contains(KeyModifiers::SHIFT) => app.cut_selection(),
         KeyCode::F(1) => app.help_open = true,
         KeyCode::F(2) => app.save_current(),
         KeyCode::F(3) => app.open_selected_file(),

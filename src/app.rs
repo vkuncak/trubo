@@ -168,6 +168,7 @@ pub struct App {
     pub active_menu_item: usize,
     pub help_open: bool,
     pub dialog: Option<Dialog>,
+    pub selection_mode: bool,
     pub status: String,
     pub browser_pane_width: u16,
     pub geometry: Geometry,
@@ -196,6 +197,7 @@ impl App {
             active_menu_item: first_selectable_item(0),
             help_open: false,
             dialog: None,
+            selection_mode: false,
             status: "Ready".to_string(),
             browser_pane_width: 30,
             geometry: Geometry::default(),
@@ -286,6 +288,15 @@ impl App {
             }
             Err(error) => self.status = format!("Save failed: {error}"),
         }
+    }
+
+    pub fn toggle_selection_mode(&mut self) {
+        self.selection_mode = !self.selection_mode;
+        self.status = if self.selection_mode {
+            "Selection mode ON".to_string()
+        } else {
+            "Selection mode OFF".to_string()
+        };
     }
 
     pub fn run_cargo(&mut self, command: &str) {
@@ -656,7 +667,7 @@ impl App {
             return;
         }
 
-        let selecting = key.modifiers.contains(KeyModifiers::SHIFT);
+        let selecting = key.modifiers.contains(KeyModifiers::SHIFT) || self.selection_mode;
         match key.code {
             KeyCode::Left if selecting => self.editor.extend_left(),
             KeyCode::Left => self.editor.move_left(),

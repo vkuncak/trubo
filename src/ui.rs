@@ -53,13 +53,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 fn draw_menu(frame: &mut Frame, area: Rect, app: &mut App) {
     app.geometry.menu = MenuGeometry::default();
     let mut spans = vec![Span::styled(
-        " TRUST ",
+        " trubo ",
         Style::default()
             .fg(DOS_YELLOW)
             .bg(DOS_DARK_GRAY)
             .add_modifier(Modifier::BOLD),
     )];
-    let mut x = area.x + " TRUST ".len() as u16;
+    let mut x = area.x + " trubo ".len() as u16;
 
     for (index, menu) in MENUS.iter().enumerate() {
         let active = app.menu_open && app.active_menu == index;
@@ -336,6 +336,10 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
     for screen_row in 0..text_rows {
         let file_row = row_offset + screen_row;
         let mut spans = Vec::new();
+        let full_width_selected = app
+            .editor
+            .selection_bounds()
+            .is_some_and(|(start, end)| file_row > start.row && file_row < end.row);
         if let Some(line) = app.editor.lines().get(file_row) {
             let number = format!(
                 "{:>width$} ",
@@ -352,6 +356,7 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
                 col_offset,
                 text_cols,
                 app.editor.selection_range_for_line(file_row),
+                full_width_selected,
             ));
         } else {
             spans.push(Span::styled(
@@ -394,7 +399,8 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
         app.editor.cursor_col() + 1
     );
     let selection = if app.editor.has_selection() { "  Sel" } else { "" };
-    let suffix = format!("  {position}{selection} ");
+    let select_mode = if app.selection_mode { "  SelMode" } else { "" };
+    let suffix = format!("  {position}{selection}{select_mode} ");
     let mut line = Line::from(vec![
         Span::styled(" ", base),
         Span::styled("F1", key),
@@ -407,6 +413,8 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled(" Focus  ", base),
         Span::styled("F5", key),
         Span::styled(" Run  ", base),
+        Span::styled("Ctrl+Sp", key),
+        Span::styled(" Select  ", base),
         Span::styled("F9", key),
         Span::styled(" Build  ", base),
         Span::styled("F10", key),
@@ -445,18 +453,20 @@ fn draw_help(frame: &mut Frame, area: Rect) {
 
     let text = Text::from(vec![
         Line::from(vec![Span::styled(
-            "TRUST keys",
+            "trubo keys",
             Style::default().add_modifier(Modifier::BOLD),
         )]),
         Line::from(""),
         Line::from("F2 Save     F3 Open selected file    F4 Cycle focus"),
-        Line::from("F5 cargo run                           F9 cargo build"),
+        Line::from("F5 cargo run   Ctrl+Space toggle select mode   F9 cargo build"),
         Line::from("Enter opens the highlighted file or directory."),
         Line::from("Backspace goes to the parent directory."),
         Line::from("Ctrl+R Run  Ctrl+B Build  Ctrl+Q Quit"),
         Line::from("Ctrl+C Copy Ctrl+X Cut Ctrl+V Paste"),
+        Line::from("Ctrl+Ins Copy  Shift+Ins Paste  Shift+Del Cut"),
         Line::from("Alt+X Delete line        Alt+U Duplicate line"),
-        Line::from("Shift+Arrows/Home/End/Page selects text."),
+        Line::from("Shift+Arrows/Home/End/Page extends selection."),
+        Line::from("If Shift+Arrows fail, use Ctrl+Space and cursor keys."),
         Line::from("Menu: F10 opens, arrows move, Enter activates."),
         Line::from(""),
         Line::from("Mouse: click files to open, drag divider to resize,"),
@@ -477,7 +487,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
 fn draw_dialog(frame: &mut Frame, dialog: Dialog, area: Rect) {
     frame.render_widget(Clear, area);
     let title = match dialog {
-        Dialog::About => " About TRUST ",
+        Dialog::About => " About trubo ",
     };
     let block = Block::default()
         .title(title)
@@ -492,7 +502,7 @@ fn draw_dialog(frame: &mut Frame, dialog: Dialog, area: Rect) {
         Dialog::About => Text::from(vec![
             Line::from(""),
             Line::from(vec![Span::styled(
-                "TRUST 0.1",
+                "trubo 0.1",
                 Style::default().add_modifier(Modifier::BOLD),
             )]),
             Line::from(""),
@@ -578,6 +588,7 @@ fn render_editor_line(
     col_offset: usize,
     text_cols: usize,
     selection: Option<(usize, usize)>,
+    full_width_selected: bool,
 ) -> Vec<Span<'static>> {
     let chars = line
         .chars()
@@ -609,14 +620,22 @@ fn render_editor_line(
         push_editor_run(&mut spans, &run, run_selected.unwrap_or(false));
     }
 
+    if full_width_selected && text_cols > 0 {
+        let rendered_cols = line.chars().skip(col_offset).take(text_cols).count();
+        if rendered_cols < text_cols {
+            let padding = " ".repeat(text_cols - rendered_cols);
+            push_editor_run(&mut spans, &padding, true);
+        }
+    }
+
     spans
 }
 
 fn push_editor_run(spans: &mut Vec<Span<'static>>, run: &str, selected: bool) {
     let style = if selected {
         Style::default()
-            .fg(DOS_BLACK)
-            .bg(DOS_CYAN)
+            .fg(DOS_BLUE)
+            .bg(DOS_YELLOW)
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(DOS_WHITE).bg(DOS_BLUE)
