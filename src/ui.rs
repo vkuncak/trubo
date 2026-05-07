@@ -449,7 +449,6 @@ fn draw_browser_log(frame: &mut Frame, area: Rect, app: &App) {
                 .bg(CURRENT_THEME.panel_background),
         )
         .borders(Borders::ALL)
-        .border_type(BorderType::Double)
         .border_style(
             Style::default()
                 .fg(CURRENT_THEME.panel_border_inactive)
@@ -493,7 +492,6 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
     };
     let block = Block::default()
         .borders(Borders::RIGHT)
-        .border_type(BorderType::Double)
         .border_style(border)
         .style(Style::default().bg(CURRENT_THEME.panel_background));
     let inner = block.inner(area);
@@ -801,7 +799,6 @@ fn retro_block<'a>(
                 .bg(CURRENT_THEME.panel_background),
         )
         .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
-        .border_type(BorderType::Double)
         .border_style(border)
         .style(Style::default().bg(CURRENT_THEME.panel_background));
 
