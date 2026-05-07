@@ -18,10 +18,6 @@ pub struct ProjectEntry {
 }
 
 impl ProjectEntry {
-    pub fn is_file(&self) -> bool {
-        self.kind == ProjectEntryKind::File
-    }
-
     pub fn is_directory(&self) -> bool {
         matches!(
             self.kind,
@@ -30,14 +26,13 @@ impl ProjectEntry {
     }
 }
 
-pub fn list_project_dir(root: &Path, dir: &Path) -> Vec<ProjectEntry> {
+pub fn list_directory(dir: &Path) -> Vec<ProjectEntry> {
     let mut directories = Vec::new();
     let mut files = Vec::new();
 
-    if dir != root {
-        let parent = dir.parent().unwrap_or(root).to_path_buf();
+    if let Some(parent) = dir.parent() {
         directories.push(ProjectEntry {
-            path: parent,
+            path: parent.to_path_buf(),
             label: "..".to_string(),
             kind: ProjectEntryKind::Parent,
         });
@@ -57,15 +52,12 @@ pub fn list_project_dir(root: &Path, dir: &Path) -> Vec<ProjectEntry> {
         };
 
         if file_type.is_dir() {
-            if should_skip_dir(&path) {
-                continue;
-            }
             directories.push(ProjectEntry {
                 label: format!("{}/", file_name(&path)),
                 path,
                 kind: ProjectEntryKind::Directory,
             });
-        } else if is_editable_project_file(&path) {
+        } else if file_type.is_file() {
             files.push(ProjectEntry {
                 label: file_name(&path),
                 path,
@@ -80,33 +72,9 @@ pub fn list_project_dir(root: &Path, dir: &Path) -> Vec<ProjectEntry> {
     directories
 }
 
-pub fn is_editable_project_file(path: &Path) -> bool {
-    if path
-        .extension()
-        .is_some_and(|extension| matches!(extension.to_str(), Some("rs" | "toml" | "lock")))
-    {
-        return true;
-    }
-
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| matches!(name, "Cargo.toml" | "Cargo.lock"))
-}
-
 fn file_name(path: &Path) -> String {
     path.file_name()
         .and_then(|name| name.to_str())
         .map(ToString::to_string)
         .unwrap_or_else(|| path.display().to_string())
-}
-
-fn should_skip_dir(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| {
-            matches!(
-                name,
-                ".git" | ".idea" | ".vscode" | "target" | "node_modules" | ".direnv"
-            )
-        })
 }

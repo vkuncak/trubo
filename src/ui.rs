@@ -1,6 +1,6 @@
 use crate::app::{
-    App, Dialog, Focus, Geometry, MENUS, MIN_DESKTOP_HEIGHT, MIN_EDITOR_PANE_WIDTH,
-    MIN_MESSAGES_PANE_HEIGHT, MIN_PROJECT_PANE_WIDTH, MenuGeometry,
+    App, Dialog, Focus, Geometry, MENUS, MIN_BROWSER_PANE_WIDTH, MIN_EDITOR_PANE_WIDTH,
+    MenuGeometry,
 };
 use ratatui::{
     Frame,
@@ -12,59 +12,41 @@ use ratatui::{
 
 const DOS_BLUE: Color = Color::Rgb(0, 0, 170);
 const DOS_CYAN: Color = Color::Rgb(0, 170, 170);
-const DOS_BRIGHT_CYAN: Color = Color::Rgb(85, 255, 255);
 const DOS_GRAY: Color = Color::Rgb(170, 170, 170);
 const DOS_DARK_GRAY: Color = Color::Rgb(85, 85, 85);
-const DOS_GREEN: Color = Color::Rgb(0, 170, 0);
-const DOS_RED: Color = Color::Rgb(170, 0, 0);
-const DOS_BRIGHT_RED: Color = Color::Rgb(255, 85, 85);
 const DOS_YELLOW: Color = Color::Rgb(255, 255, 85);
 const DOS_WHITE: Color = Color::Rgb(255, 255, 255);
 const DOS_BLACK: Color = Color::Rgb(0, 0, 0);
+const DOS_RED: Color = Color::Rgb(170, 0, 0);
+const DOS_BRIGHT_RED: Color = Color::Rgb(255, 85, 85);
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let root = frame.area();
     frame.render_widget(Block::default().style(Style::default().bg(DOS_BLUE)), root);
 
-    app.messages_pane_height = clamp_messages_height(root.height, app.messages_pane_height);
-
     let vertical = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(8),
-            Constraint::Length(app.messages_pane_height),
-            Constraint::Length(1),
-        ])
+        .constraints([Constraint::Length(1), Constraint::Min(8), Constraint::Length(1)])
         .split(root);
 
     app.geometry = Geometry {
         root,
         menu_area: vertical[0],
-        messages_area: vertical[2],
-        status_area: vertical[3],
         ..Geometry::default()
     };
 
     draw_menu(frame, vertical[0], app);
     draw_desktop(frame, vertical[1], app);
-    draw_messages(frame, vertical[2], app);
-    draw_status(frame, vertical[3], app);
+    draw_status(frame, vertical[2], app);
 
     if app.menu_open {
         draw_menu_dropdown(frame, app);
     }
 
     if app.help_open {
-        draw_help(frame, centered(root, 72, 17));
+        draw_help(frame, centered(root, 72, 15));
     } else if let Some(dialog) = app.dialog {
-        match dialog {
-            Dialog::NewFile => draw_new_file_dialog(frame, app, centered(root, 66, 10)),
-            Dialog::NewProject => draw_new_project_dialog(frame, app, centered(root, 74, 16)),
-            Dialog::About | Dialog::CompileResult => {
-                draw_dialog(frame, app, dialog, centered(root, 66, 13));
-            }
-        }
+        draw_dialog(frame, dialog, centered(root, 60, 10));
     }
 }
 
@@ -166,7 +148,7 @@ fn draw_menu_dropdown(frame: &mut Frame, app: &mut App) {
         .map(|(index, item)| {
             if item.separator {
                 Line::from(Span::styled(
-                    "─".repeat(inner.width as usize),
+                    "-".repeat(inner.width as usize),
                     Style::default().fg(DOS_DARK_GRAY).bg(DOS_GRAY),
                 ))
             } else {
@@ -221,56 +203,54 @@ fn draw_desktop(frame: &mut Frame, area: Rect, app: &mut App) {
         horizontal: 1,
         vertical: 0,
     });
-    app.project_pane_width = clamp_project_width(desktop.width, app.project_pane_width);
+    app.browser_pane_width = clamp_browser_width(desktop.width, app.browser_pane_width);
     app.geometry.desktop_inner = desktop;
 
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Length(app.project_pane_width),
+            Constraint::Length(app.browser_pane_width),
             Constraint::Min(MIN_EDITOR_PANE_WIDTH),
         ])
         .split(desktop);
 
-    app.geometry.project_area = columns[0];
+    app.geometry.browser_area = columns[0];
     app.geometry.editor_area = columns[1];
-    draw_project(frame, columns[0], app);
+    draw_browser(frame, columns[0], app);
     draw_editor(frame, columns[1], app);
 }
 
-fn draw_project(frame: &mut Frame, area: Rect, app: &mut App) {
-    let title = format!(" Project: {} ", app.browser_label());
+fn draw_browser(frame: &mut Frame, area: Rect, app: &mut App) {
+    let title = format!(" Files: {} ", app.browser_label());
     let block = retro_block(
         &title,
-        app.focus == Focus::Project,
+        app.focus == Focus::Browser,
         "Enter Open",
         Some("Backspace Up"),
     );
     let inner = block.inner(area);
-    app.geometry.project_inner = inner;
+    app.geometry.browser_inner = inner;
     frame.render_widget(block, area);
 
-    if app.project_files.is_empty() {
-        let text = Text::from(vec![
-            Line::from("No editable files here."),
-            Line::from(""),
-            Line::from("Use File > New"),
-            Line::from("or enter another directory."),
-        ]);
+    if app.entries.is_empty() {
         frame.render_widget(
-            Paragraph::new(text)
-                .style(Style::default().fg(DOS_WHITE).bg(DOS_BLUE))
-                .alignment(Alignment::Center),
+            Paragraph::new(Text::from(vec![
+                Line::from("Directory is empty."),
+                Line::from(""),
+                Line::from("Use arrows to browse."),
+            ]))
+            .style(Style::default().fg(DOS_WHITE).bg(DOS_BLUE))
+            .alignment(Alignment::Center),
             inner,
         );
         return;
     }
 
     let height = inner.height as usize;
-    let selected = app.selected_file;
+    let selected = app.selected_entry;
     let start = selected.saturating_sub(height.saturating_sub(1));
     let items = app
-        .project_files
+        .entries
         .iter()
         .enumerate()
         .skip(start)
@@ -355,77 +335,13 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
     if app.focus == Focus::Editor {
         let cursor_x = inner.x
             + line_number_width
-            + app
-                .editor
-                .cursor_col()
-                .saturating_sub(app.editor.col_offset()) as u16;
+            + app.editor.cursor_col().saturating_sub(app.editor.col_offset()) as u16;
         let cursor_y = inner.y
-            + app
-                .editor
-                .cursor_row()
-                .saturating_sub(app.editor.row_offset()) as u16;
+            + app.editor.cursor_row().saturating_sub(app.editor.row_offset()) as u16;
         if cursor_x < inner.x + inner.width && cursor_y < inner.y + inner.height {
             frame.set_cursor_position((cursor_x, cursor_y));
         }
     }
-}
-
-fn draw_messages(frame: &mut Frame, area: Rect, app: &mut App) {
-    let block = Block::default()
-        .title(" Compiler Messages ")
-        .title_style(Style::default().fg(DOS_BLUE).bg(DOS_CYAN))
-        .borders(Borders::ALL)
-        .border_type(BorderType::Double)
-        .border_style(Style::default().fg(DOS_BLUE).bg(DOS_CYAN).add_modifier(
-            if app.focus == Focus::Messages {
-                Modifier::BOLD
-            } else {
-                Modifier::empty()
-            },
-        ))
-        .style(Style::default().fg(DOS_BLUE).bg(DOS_CYAN))
-        .title_bottom(Line::from(Span::styled(
-            "Cargo",
-            Style::default().fg(DOS_BLUE).bg(DOS_CYAN),
-        )))
-        .title_bottom(
-            Line::from(Span::styled(
-                "F7 Check",
-                Style::default().fg(DOS_BLUE).bg(DOS_CYAN),
-            ))
-            .right_aligned(),
-        );
-    let inner = block.inner(area);
-    app.geometry.messages_inner = inner;
-    frame.render_widget(block, area);
-
-    let visible_rows = inner.height as usize;
-    let total = app.messages.len();
-    let start = total.saturating_sub(visible_rows + app.message_scroll);
-    let end = total.saturating_sub(app.message_scroll);
-
-    let active_message = app.active_message.min(total.saturating_sub(1));
-    let items = app.messages[start..end]
-        .iter()
-        .enumerate()
-        .map(|(offset, message)| {
-            let index = start + offset;
-            let style = if index == active_message {
-                Style::default()
-                    .fg(DOS_BRIGHT_CYAN)
-                    .bg(DOS_GREEN)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(DOS_BLUE).bg(DOS_CYAN)
-            };
-            Line::from(Span::styled(truncate(message, inner.width), style))
-        })
-        .collect::<Vec<_>>();
-
-    frame.render_widget(
-        Paragraph::new(items).style(Style::default().fg(DOS_BLUE).bg(DOS_CYAN)),
-        inner,
-    );
 }
 
 fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
@@ -442,11 +358,7 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
         app.editor.cursor_row() + 1,
         app.editor.cursor_col() + 1
     );
-    let selection = if app.editor.has_selection() {
-        "  Sel"
-    } else {
-        ""
-    };
+    let selection = if app.editor.has_selection() { "  Sel" } else { "" };
     let suffix = format!("  {position}{selection}  {} ", app.status);
     let mut line = Line::from(vec![
         Span::styled(" ", base),
@@ -456,12 +368,8 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled(" Save  ", base),
         Span::styled("F3", key),
         Span::styled(" Open  ", base),
-        Span::styled("F5", key),
-        Span::styled(" Run  ", base),
-        Span::styled("F7", key),
-        Span::styled(" Check  ", base),
-        Span::styled("F9", key),
-        Span::styled(" Build  ", base),
+        Span::styled("F4", key),
+        Span::styled(" Focus  ", base),
         Span::styled("F10", key),
         Span::styled(" Menu", base),
         Span::styled(suffix, base),
@@ -474,20 +382,14 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(line).style(base), area);
 }
 
-fn clamp_messages_height(root_height: u16, current: u16) -> u16 {
-    let max_height = root_height.saturating_sub(MIN_DESKTOP_HEIGHT + 2).max(1);
-    let min_height = MIN_MESSAGES_PANE_HEIGHT.min(max_height);
-    current.clamp(min_height, max_height)
-}
-
-fn clamp_project_width(total_width: u16, current: u16) -> u16 {
+fn clamp_browser_width(total_width: u16, current: u16) -> u16 {
     if total_width <= 1 {
         return 1;
     }
 
     let editor_reserve = MIN_EDITOR_PANE_WIDTH.min(total_width.saturating_sub(1));
     let max_width = total_width.saturating_sub(editor_reserve).max(1);
-    let min_width = MIN_PROJECT_PANE_WIDTH.min(max_width);
+    let min_width = MIN_BROWSER_PANE_WIDTH.min(max_width);
     current.clamp(min_width, max_width)
 }
 
@@ -509,20 +411,17 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         )]),
         Line::from(""),
         Line::from("F2 Save     F3 Open selected file    F4 Cycle focus"),
-        Line::from("File > New creates a file"),
-        Line::from("Project > New project runs cargo new"),
-        Line::from("F5 Run      F7 Cargo check           F8 Test"),
-        Line::from("F9 Build    F10 Menu                 Esc Quit"),
+        Line::from("Enter opens the highlighted file or directory."),
+        Line::from("Backspace goes to the parent directory."),
         Line::from("Ctrl+C Copy Ctrl+X Cut Ctrl+V Paste Ctrl+Q Quit"),
-        Line::from("Ctrl+S Save Ctrl+F Focus            Alt+U Duplicate line"),
-        Line::from("Shift+Arrows/Home/End/Page selects text"),
+        Line::from("Alt+X Delete line        Alt+U Duplicate line"),
+        Line::from("Shift+Arrows/Home/End/Page selects text."),
         Line::from("Menu: F10 opens, arrows move, Enter activates."),
         Line::from(""),
-        Line::from("Mouse: click panes to focus, click source to move cursor,"),
-        Line::from("click files/directories to open or browse,"),
-        Line::from("drag pane borders to resize."),
+        Line::from("Mouse: click files to open, drag divider to resize,"),
+        Line::from("click or drag inside the editor to move/select text."),
         Line::from(""),
-        Line::from("The colors are intentionally loud. History had opinions."),
+        Line::from("Any file extension can be opened as text."),
         Line::from("Press any key to return."),
     ]);
     frame.render_widget(
@@ -534,13 +433,10 @@ fn draw_help(frame: &mut Frame, area: Rect) {
     );
 }
 
-fn draw_dialog(frame: &mut Frame, app: &App, dialog: Dialog, area: Rect) {
+fn draw_dialog(frame: &mut Frame, dialog: Dialog, area: Rect) {
     frame.render_widget(Clear, area);
     let title = match dialog {
         Dialog::About => " About TRUST ",
-        Dialog::CompileResult => " Cargo Result ",
-        Dialog::NewFile => " New File ",
-        Dialog::NewProject => " New Project ",
     };
     let block = Block::default()
         .title(title)
@@ -559,24 +455,11 @@ fn draw_dialog(frame: &mut Frame, app: &App, dialog: Dialog, area: Rect) {
                 Style::default().add_modifier(Modifier::BOLD),
             )]),
             Line::from(""),
-            Line::from("Retro DOS-style Rust IDE"),
-            Line::from("a terminal IDE for Rust projects."),
-            Line::from(""),
-            Line::from("Press any key to begin."),
-        ]),
-        Dialog::CompileResult => Text::from(vec![
-            Line::from(vec![Span::styled(
-                app.status.clone(),
-                Style::default().add_modifier(Modifier::BOLD),
-            )]),
-            Line::from(""),
-            Line::from("Compiler output is in the message window."),
-            Line::from("Use F7/F8/F9/F5 for check/test/build/run."),
+            Line::from("Retro DOS-style terminal text editor"),
+            Line::from("with a built-in file browser."),
             Line::from(""),
             Line::from("Press any key to return."),
         ]),
-        Dialog::NewFile => Text::from(""),
-        Dialog::NewProject => Text::from(""),
     };
 
     frame.render_widget(
@@ -586,130 +469,6 @@ fn draw_dialog(frame: &mut Frame, app: &App, dialog: Dialog, area: Rect) {
             .wrap(Wrap { trim: true }),
         inner,
     );
-}
-
-fn draw_new_file_dialog(frame: &mut Frame, app: &App, area: Rect) {
-    frame.render_widget(Clear, area);
-    let block = Block::default()
-        .title(" New File ")
-        .borders(Borders::ALL)
-        .border_type(BorderType::Double)
-        .border_style(Style::default().fg(DOS_YELLOW).bg(DOS_CYAN))
-        .style(Style::default().fg(DOS_BLACK).bg(DOS_GRAY));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let directory = truncate(&app.browser_label(), inner.width.saturating_sub(16).max(1));
-    let filename = truncate(&app.new_file.name, inner.width.saturating_sub(16).max(1));
-
-    let text = Text::from(vec![
-        Line::from(""),
-        Line::from(vec![
-            Span::styled(" Directory ", Style::default().fg(DOS_BLACK).bg(DOS_GRAY)),
-            Span::styled(
-                format!(" {directory} "),
-                Style::default().fg(DOS_BLUE).bg(DOS_CYAN),
-            ),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled(" Filename  ", Style::default().fg(DOS_BLACK).bg(DOS_GRAY)),
-            Span::styled(format!(" {filename} "), new_project_field_style(true)),
-        ]),
-        Line::from(""),
-        Line::from(" Enter creates. Esc cancels."),
-    ]);
-
-    frame.render_widget(
-        Paragraph::new(text)
-            .style(Style::default().fg(DOS_BLACK).bg(DOS_GRAY))
-            .wrap(Wrap { trim: true }),
-        inner,
-    );
-}
-
-fn draw_new_project_dialog(frame: &mut Frame, app: &App, area: Rect) {
-    frame.render_widget(Clear, area);
-    let block = Block::default()
-        .title(" New Cargo Project ")
-        .borders(Borders::ALL)
-        .border_type(BorderType::Double)
-        .border_style(Style::default().fg(DOS_YELLOW).bg(DOS_CYAN))
-        .style(Style::default().fg(DOS_BLACK).bg(DOS_GRAY));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let directory_style =
-        new_project_field_style(app.new_project.field == crate::app::NewProjectField::Directory);
-    let name_style =
-        new_project_field_style(app.new_project.field == crate::app::NewProjectField::Name);
-    let kind_style =
-        new_project_field_style(app.new_project.field == crate::app::NewProjectField::Kind);
-    let create_style =
-        new_project_field_style(app.new_project.field == crate::app::NewProjectField::Create);
-
-    let kind = app.new_project.kind;
-    let bin_style = if kind == crate::app::NewProjectKind::Bin {
-        kind_style.add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(DOS_BLACK).bg(DOS_GRAY)
-    };
-    let lib_style = if kind == crate::app::NewProjectKind::Lib {
-        kind_style.add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(DOS_BLACK).bg(DOS_GRAY)
-    };
-
-    let directory = truncate(
-        &app.new_project.directory,
-        inner.width.saturating_sub(18).max(1),
-    );
-    let name = truncate(&app.new_project.name, inner.width.saturating_sub(18).max(1));
-
-    let text = Text::from(vec![
-        Line::from(""),
-        Line::from(vec![
-            Span::styled(" Directory ", Style::default().fg(DOS_BLACK).bg(DOS_GRAY)),
-            Span::styled(format!(" {directory} "), directory_style),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled(" Project   ", Style::default().fg(DOS_BLACK).bg(DOS_GRAY)),
-            Span::styled(format!(" {name} "), name_style),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled(" Type      ", Style::default().fg(DOS_BLACK).bg(DOS_GRAY)),
-            Span::styled(" bin ", bin_style),
-            Span::styled("  ", Style::default().fg(DOS_BLACK).bg(DOS_GRAY)),
-            Span::styled(" lib ", lib_style),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("           ", Style::default().fg(DOS_BLACK).bg(DOS_GRAY)),
-            Span::styled(" Create ", create_style),
-        ]),
-        Line::from(""),
-        Line::from(" Tab moves fields. Enter creates. Esc cancels."),
-    ]);
-
-    frame.render_widget(
-        Paragraph::new(text)
-            .style(Style::default().fg(DOS_BLACK).bg(DOS_GRAY))
-            .wrap(Wrap { trim: true }),
-        inner,
-    );
-}
-
-fn new_project_field_style(active: bool) -> Style {
-    if active {
-        Style::default()
-            .fg(DOS_WHITE)
-            .bg(DOS_BLUE)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(DOS_BLUE).bg(DOS_CYAN)
-    }
 }
 
 fn retro_block<'a>(
@@ -813,114 +572,13 @@ fn render_editor_line(
 }
 
 fn push_editor_run(spans: &mut Vec<Span<'static>>, run: &str, selected: bool) {
-    if selected {
-        spans.push(Span::styled(
-            run.to_string(),
-            Style::default()
-                .fg(DOS_BLACK)
-                .bg(DOS_CYAN)
-                .add_modifier(Modifier::BOLD),
-        ));
-    } else {
-        spans.extend(highlight_rust(run));
-    }
-}
-
-fn highlight_rust(line: &str) -> Vec<Span<'static>> {
-    let mut spans = Vec::new();
-    let mut current = String::new();
-    let mut in_string = false;
-
-    for character in line.chars() {
-        if character == '"' {
-            if !current.is_empty() {
-                spans.push(classify_token(&current));
-                current.clear();
-            }
-            spans.push(Span::styled(
-                "\"",
-                Style::default().fg(DOS_YELLOW).bg(DOS_BLUE),
-            ));
-            in_string = !in_string;
-        } else if in_string {
-            spans.push(Span::styled(
-                character.to_string(),
-                Style::default().fg(DOS_YELLOW).bg(DOS_BLUE),
-            ));
-        } else if character.is_alphanumeric() || character == '_' {
-            current.push(character);
-        } else {
-            if !current.is_empty() {
-                spans.push(classify_token(&current));
-                current.clear();
-            }
-            spans.push(Span::styled(
-                character.to_string(),
-                Style::default().fg(DOS_WHITE).bg(DOS_BLUE),
-            ));
-        }
-    }
-
-    if !current.is_empty() {
-        spans.push(classify_token(&current));
-    }
-
-    spans
-}
-
-fn classify_token(token: &str) -> Span<'static> {
-    let style = if is_keyword(token) {
+    let style = if selected {
         Style::default()
-            .fg(DOS_YELLOW)
-            .bg(DOS_BLUE)
+            .fg(DOS_BLACK)
+            .bg(DOS_CYAN)
             .add_modifier(Modifier::BOLD)
-    } else if matches!(token, "self" | "Self" | "crate" | "super") {
-        Style::default().fg(DOS_CYAN).bg(DOS_BLUE)
     } else {
         Style::default().fg(DOS_WHITE).bg(DOS_BLUE)
     };
-    Span::styled(token.to_string(), style)
-}
-
-fn is_keyword(token: &str) -> bool {
-    matches!(
-        token,
-        "as" | "async"
-            | "await"
-            | "break"
-            | "const"
-            | "continue"
-            | "crate"
-            | "dyn"
-            | "else"
-            | "enum"
-            | "extern"
-            | "false"
-            | "fn"
-            | "for"
-            | "if"
-            | "impl"
-            | "in"
-            | "let"
-            | "loop"
-            | "match"
-            | "mod"
-            | "move"
-            | "mut"
-            | "pub"
-            | "ref"
-            | "return"
-            | "self"
-            | "Self"
-            | "static"
-            | "struct"
-            | "super"
-            | "trait"
-            | "true"
-            | "type"
-            | "unsafe"
-            | "use"
-            | "where"
-            | "while"
-    )
+    spans.push(Span::styled(run.to_string(), style));
 }

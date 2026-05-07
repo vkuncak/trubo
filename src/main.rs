@@ -26,23 +26,31 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 type TerminalUi = Terminal<CrosstermBackend<Stdout>>;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let root = match parse_args()? {
+    let target = match parse_args()? {
         Startup::Help => {
             print_usage();
             return Ok(());
         }
-        Startup::Open(root) => root,
+        Startup::Open(path) => path,
     };
 
     if !io::stdout().is_terminal() {
         return Err("TRUST must be run in an interactive terminal".into());
     }
 
-    let root = root.canonicalize().unwrap_or(root);
+    let target = target.canonicalize().unwrap_or(target);
+    if !target.exists() {
+        return Err(format!("No such file or directory: {}", target.display()).into());
+    }
 
     let mut terminal = setup_terminal()?;
-    let mut app = App::new(root);
-    app.refresh_project();
+    let mut app = App::new(target.clone());
+    app.refresh_browser();
+    if target.is_file() {
+        app.open_path(target);
+    } else {
+        app.status = format!("Browsing {}", app.browser_label());
+    }
 
     let result = run(&mut terminal, &mut app);
     restore_terminal(&mut terminal)?;
@@ -67,7 +75,7 @@ fn parse_args() -> Result<Startup, Box<dyn std::error::Error>> {
         [] => Ok(Startup::Open(env::current_dir()?)),
         [flag] if is_help_flag(flag) => Ok(Startup::Help),
         [path] => Ok(Startup::Open(PathBuf::from(path))),
-        _ => Err("usage: trust [PROJECT_PATH]".into()),
+        _ => Err("usage: trust [FILE_OR_DIRECTORY]".into()),
     }
 }
 
@@ -76,12 +84,12 @@ fn is_help_flag(value: &OsString) -> bool {
 }
 
 fn print_usage() {
-    println!("TRUST - retro DOS-style TUI IDE for Rust projects");
+    println!("TRUST - retro DOS-style terminal text editor");
     println!();
     println!("Usage:");
-    println!("  trust [PROJECT_PATH]");
+    println!("  trust [FILE_OR_DIRECTORY]");
     println!();
-    println!("Keys: F1 Help, F2 Save, F3 Open, F5 Run, F7 Check, F9 Build, Ctrl+Q Quit");
+    println!("Keys: F1 Help, F2 Save, F3 Open, F4 Focus, F10 Menu, Ctrl+Q Quit");
 }
 
 fn setup_terminal() -> io::Result<TerminalUi> {
@@ -161,9 +169,6 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
             KeyCode::Char('s') | KeyCode::Char('S') => app.save_current(),
             KeyCode::Char('f') | KeyCode::Char('F') => app.toggle_focus(),
             KeyCode::Char('o') | KeyCode::Char('O') => app.open_selected_file(),
-            KeyCode::Char('r') | KeyCode::Char('R') => app.run_cargo("run"),
-            KeyCode::Char('t') | KeyCode::Char('T') => app.run_cargo("test"),
-            KeyCode::Char('b') | KeyCode::Char('B') => app.run_cargo("build"),
             _ => {}
         }
         return Action::None;
@@ -177,10 +182,6 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
         KeyCode::F(2) => app.save_current(),
         KeyCode::F(3) => app.open_selected_file(),
         KeyCode::F(4) => app.toggle_focus(),
-        KeyCode::F(5) => app.run_cargo("run"),
-        KeyCode::F(7) => app.run_cargo("check"),
-        KeyCode::F(8) => app.run_cargo("test"),
-        KeyCode::F(9) => app.run_cargo("build"),
         KeyCode::F(10) => app.toggle_menu(),
         KeyCode::Tab => app.toggle_focus(),
         KeyCode::BackTab => app.toggle_focus(),

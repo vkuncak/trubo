@@ -2,7 +2,7 @@
 name = "trust"
 version = "0.1.0"
 edition = "2024"
-description = "A retro DOS-style TUI IDE for Rust projects"
+description = "A retro DOS-style TUI text editor"
 license = "MIT"
 
 [dependencies]
