@@ -24,6 +24,18 @@ enum Movement {
 }
 
 #[derive(Debug, Clone)]
+struct UndoState {
+    lines: Vec<String>,
+    cursor_row: usize,
+    cursor_col: usize,
+    row_offset: usize,
+    row_segment_offset: usize,
+    col_offset: usize,
+    selection_anchor: Option<Position>,
+    dirty: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct Editor {
     path: Option<PathBuf>,
     lines: Vec<String>,
@@ -35,6 +47,7 @@ pub struct Editor {
     viewport_rows: usize,
     viewport_cols: usize,
     selection_anchor: Option<Position>,
+    undo_state: Option<UndoState>,
     dirty: bool,
 }
 
@@ -51,6 +64,7 @@ impl Editor {
             viewport_rows: 18,
             viewport_cols: 72,
             selection_anchor: None,
+            undo_state: None,
             dirty: false,
         }
     }
@@ -73,6 +87,7 @@ impl Editor {
             viewport_rows: 18,
             viewport_cols: 72,
             selection_anchor: None,
+            undo_state: None,
             dirty: false,
         })
     }
@@ -278,6 +293,7 @@ impl Editor {
     }
 
     pub fn insert_char(&mut self, character: char) {
+        self.capture_undo_state();
         self.delete_selection();
         let cursor_col = self.cursor_col;
         let byte_idx = char_to_byte(&self.lines[self.cursor_row], cursor_col);
@@ -293,6 +309,7 @@ impl Editor {
             return;
         }
 
+        self.capture_undo_state();
         self.delete_selection();
         let parts = text.split('\n').collect::<Vec<_>>();
         if parts.len() == 1 {
@@ -322,6 +339,7 @@ impl Editor {
     }
 
     pub fn insert_newline(&mut self) {
+        self.capture_undo_state();
         self.delete_selection();
         let cursor_col = self.cursor_col;
         let byte_idx = char_to_byte(&self.lines[self.cursor_row], cursor_col);
@@ -334,6 +352,12 @@ impl Editor {
     }
 
     pub fn backspace(&mut self) {
+        if self.selection_bounds().is_none() && self.cursor_col == 0 && self.cursor_row == 0 {
+            self.keep_cursor_visible();
+            return;
+        }
+
+        self.capture_undo_state();
         if self.delete_selection() {
             return;
         }
@@ -354,6 +378,15 @@ impl Editor {
     }
 
     pub fn delete(&mut self) {
+        if self.selection_bounds().is_none()
+            && self.cursor_col >= self.line_len(self.cursor_row)
+            && self.cursor_row + 1 >= self.lines.len()
+        {
+            self.keep_cursor_visible();
+            return;
+        }
+
+        self.capture_undo_state();
         if self.delete_selection() {
             return;
         }
@@ -371,6 +404,7 @@ impl Editor {
     }
 
     pub fn delete_line(&mut self) {
+        self.capture_undo_state();
         self.clear_selection();
         if self.lines.len() == 1 {
             self.lines[0].clear();
@@ -385,12 +419,30 @@ impl Editor {
     }
 
     pub fn duplicate_line(&mut self) {
+        self.capture_undo_state();
         self.clear_selection();
         let line = self.lines[self.cursor_row].clone();
         self.lines.insert(self.cursor_row + 1, line);
         self.cursor_row += 1;
         self.dirty = true;
         self.keep_cursor_visible();
+    }
+
+    pub fn undo(&mut self) -> bool {
+        let Some(state) = self.undo_state.take() else {
+            return false;
+        };
+
+        self.lines = state.lines;
+        self.cursor_row = state.cursor_row;
+        self.cursor_col = state.cursor_col;
+        self.row_offset = state.row_offset;
+        self.row_segment_offset = state.row_segment_offset;
+        self.col_offset = state.col_offset;
+        self.selection_anchor = state.selection_anchor;
+        self.dirty = state.dirty;
+        self.keep_cursor_visible();
+        true
     }
 
     pub fn set_viewport(&mut self, rows: usize, cols: usize) {
@@ -534,6 +586,19 @@ impl Editor {
 
     fn clear_selection(&mut self) {
         self.selection_anchor = None;
+    }
+
+    fn capture_undo_state(&mut self) {
+        self.undo_state = Some(UndoState {
+            lines: self.lines.clone(),
+            cursor_row: self.cursor_row,
+            cursor_col: self.cursor_col,
+            row_offset: self.row_offset,
+            row_segment_offset: self.row_segment_offset,
+            col_offset: self.col_offset,
+            selection_anchor: self.selection_anchor,
+            dirty: self.dirty,
+        });
     }
 
     fn current_position(&self) -> Position {
@@ -779,5 +844,29 @@ mod tests {
         assert_eq!(editor.cursor_row(), 0);
         assert_eq!(editor.cursor_col(), 5);
         assert_eq!(editor.selected_text().as_deref(), Some("bcde"));
+    }
+
+    #[test]
+    fn undo_reverts_last_insert() {
+        let mut editor = Editor::scratch();
+        editor.insert_text("abc");
+
+        assert!(editor.undo());
+        assert_eq!(editor.lines(), &["".to_string()]);
+        assert_eq!(editor.cursor_row(), 0);
+        assert_eq!(editor.cursor_col(), 0);
+    }
+
+    #[test]
+    fn undo_reverts_last_delete_only() {
+        let mut editor = Editor::scratch();
+        editor.insert_text("abcd");
+        editor.backspace();
+
+        assert!(editor.undo());
+        assert_eq!(editor.lines(), &["abcd".to_string()]);
+
+        // Single-step undo: no additional history beyond the last edit.
+        assert!(!editor.undo());
     }
 }

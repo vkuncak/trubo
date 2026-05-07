@@ -555,6 +555,18 @@ impl App {
         self.status = format!("Pasted {} characters", text.chars().count());
     }
 
+    pub fn undo_last_edit(&mut self) {
+        self.dialog = None;
+        self.help_open = false;
+        self.focus = Focus::Editor;
+
+        if self.editor.undo() {
+            self.status = "Undo applied".to_string();
+        } else {
+            self.status = "Nothing to undo".to_string();
+        }
+    }
+
     pub fn handle_mouse(&mut self, mouse: MouseEvent) -> Action {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {

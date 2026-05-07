@@ -173,6 +173,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
             KeyCode::Char('c') | KeyCode::Char('C') => app.copy_selection(),
             KeyCode::Char('x') | KeyCode::Char('X') => app.cut_selection(),
             KeyCode::Char('v') | KeyCode::Char('V') => app.paste_from_clipboard(),
+            KeyCode::Char('z') | KeyCode::Char('Z') => app.undo_last_edit(),
             KeyCode::Insert => app.copy_selection(),
             KeyCode::Char('s') | KeyCode::Char('S') => app.save_current(),
             KeyCode::Char('f') | KeyCode::Char('F') => app.toggle_focus(),

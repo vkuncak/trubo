@@ -678,7 +678,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Line::from("Enter opens the highlighted file or directory."),
         Line::from("Backspace goes to the parent directory."),
         Line::from("Ctrl+R Run  Ctrl+B Build  Ctrl+Q Quit"),
-        Line::from("Ctrl+C Copy Ctrl+X Cut Ctrl+V Paste"),
+        Line::from("Ctrl+C Copy Ctrl+X Cut Ctrl+V Paste Ctrl+Z Undo"),
         Line::from("Ctrl+Ins Copy  Shift+Ins Paste  Shift+Del Cut"),
         Line::from("Alt+X Delete line        Alt+U Duplicate line"),
         Line::from("Shift+Arrows/Home/End/Page extends selection."),
