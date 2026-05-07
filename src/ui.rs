@@ -34,6 +34,7 @@ struct Theme {
     selected_fg: Color,
     editor_text_fg: Color,
     editor_text_bg: Color,
+    editor_identifier_fg: Color,
     editor_line_number_fg: Color,
     editor_line_number_bg: Color,
     editor_selection_bg: Color,
@@ -64,11 +65,34 @@ const CURRENT_THEME: Theme = Theme {
     selected_fg: Color::Rgb(0, 0, 0),
     editor_text_fg: Color::Rgb(0, 0, 0),
     editor_text_bg: Color::Rgb(255, 255, 255),
+    editor_identifier_fg: Color::Rgb(0, 5, 0),
     editor_line_number_fg: Color::Rgb(0, 60, 0),
     editor_line_number_bg: Color::Rgb(200, 200, 200),
     editor_selection_bg: Color::Rgb(0, 210, 230),
     editor_selection_fg: Color::Rgb(0, 0, 0),
 };
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TokenKind {
+    Plain,
+    Identifier,
+    Keyword,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RunStyle {
+    Normal,
+    Identifier,
+    Keyword,
+    Selected,
+}
+
+const KEYWORDS: &[&str] = &[
+    "as", "break", "const", "continue", "crate", "else", "enum", "extern", "false",
+    "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut",
+    "pub", "ref", "return", "self", "Self", "static", "struct", "super", "trait",
+    "true", "type", "unsafe", "use", "where", "while",
+];
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let root = frame.area();
@@ -434,6 +458,7 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
         if let Some(line) = app.editor.lines().get(file_row) {
             let line_len = line.chars().count();
             let wrapped = wrapped_rows(line_len, text_cols);
+            let token_kinds = tokenize_line(line);
             let full_width_selected = app
                 .editor
                 .selection_bounds()
@@ -468,6 +493,7 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
                     text_cols,
                     selection,
                     full_width_selected,
+                    &token_kinds,
                 ));
                 lines.push(Line::from(spans));
             }
@@ -781,6 +807,7 @@ fn render_editor_segment(
     text_cols: usize,
     selection: Option<(usize, usize)>,
     full_width_selected: bool,
+    token_kinds: &[TokenKind],
 ) -> Vec<Span<'static>> {
     let chars = line
         .chars()
@@ -789,34 +816,47 @@ fn render_editor_segment(
         .collect::<Vec<_>>();
     let mut spans = Vec::new();
     let mut run = String::new();
-    let mut run_selected = None;
+    let mut run_style: Option<RunStyle> = None;
 
     for (screen_col, character) in chars.into_iter().enumerate() {
         let absolute_col = segment_start + screen_col;
         let selected = selection
             .map(|(start, end)| absolute_col >= start && absolute_col < end)
             .unwrap_or(false);
-
-        if run_selected == Some(selected) || run_selected.is_none() {
-            run.push(character);
-            run_selected = Some(selected);
+        let token = token_kinds
+            .get(absolute_col)
+            .copied()
+            .unwrap_or(TokenKind::Plain);
+        let style = if selected {
+            RunStyle::Selected
+        } else if token == TokenKind::Keyword {
+            RunStyle::Keyword
+        } else if token == TokenKind::Identifier {
+            RunStyle::Identifier
         } else {
-            push_editor_run(&mut spans, &run, run_selected.unwrap_or(false));
+            RunStyle::Normal
+        };
+
+        if run_style == Some(style) || run_style.is_none() {
+            run.push(character);
+            run_style = Some(style);
+        } else {
+            push_editor_run(&mut spans, &run, run_style.unwrap_or(RunStyle::Normal));
             run.clear();
             run.push(character);
-            run_selected = Some(selected);
+            run_style = Some(style);
         }
     }
 
     if !run.is_empty() {
-        push_editor_run(&mut spans, &run, run_selected.unwrap_or(false));
+        push_editor_run(&mut spans, &run, run_style.unwrap_or(RunStyle::Normal));
     }
 
     if full_width_selected && text_cols > 0 {
         let rendered_cols = line.chars().skip(segment_start).take(text_cols).count();
         if rendered_cols < text_cols {
             let padding = " ".repeat(text_cols - rendered_cols);
-            push_editor_run(&mut spans, &padding, true);
+            push_editor_run(&mut spans, &padding, RunStyle::Selected);
         }
     }
 
@@ -830,16 +870,59 @@ fn wrapped_rows(line_len: usize, text_cols: usize) -> usize {
     line_len.max(1).div_ceil(text_cols)
 }
 
-fn push_editor_run(spans: &mut Vec<Span<'static>>, run: &str, selected: bool) {
-    let style = if selected {
-        Style::default()
+fn tokenize_line(line: &str) -> Vec<TokenKind> {
+    let chars = line.chars().collect::<Vec<_>>();
+    let mut kinds = vec![TokenKind::Plain; chars.len()];
+    let mut idx = 0;
+
+    while idx < chars.len() {
+        if is_identifier_start(chars[idx]) {
+            let start = idx;
+            idx += 1;
+            while idx < chars.len() && is_identifier_continue(chars[idx]) {
+                idx += 1;
+            }
+            let identifier = chars[start..idx].iter().collect::<String>();
+            let kind = if KEYWORDS.contains(&identifier.as_str()) {
+                TokenKind::Keyword
+            } else {
+                TokenKind::Identifier
+            };
+            for token_kind in &mut kinds[start..idx] {
+                *token_kind = kind;
+            }
+        } else {
+            idx += 1;
+        }
+    }
+
+    kinds
+}
+
+fn is_identifier_start(character: char) -> bool {
+    character == '_' || character.is_ascii_alphabetic()
+}
+
+fn is_identifier_continue(character: char) -> bool {
+    character == '_' || character.is_ascii_alphanumeric()
+}
+
+fn push_editor_run(spans: &mut Vec<Span<'static>>, run: &str, style: RunStyle) {
+    let style = match style {
+        RunStyle::Selected => Style::default()
             .fg(CURRENT_THEME.editor_selection_fg)
             .bg(CURRENT_THEME.editor_selection_bg)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
+            .add_modifier(Modifier::BOLD),
+        RunStyle::Identifier => Style::default()
+            .fg(CURRENT_THEME.editor_identifier_fg)
+            .bg(CURRENT_THEME.editor_text_bg),
+        RunStyle::Keyword => Style::default()
             .fg(CURRENT_THEME.editor_text_fg)
             .bg(CURRENT_THEME.editor_text_bg)
+            .add_modifier(Modifier::BOLD),
+        RunStyle::Normal => Style::default()
+            .fg(CURRENT_THEME.editor_text_fg)
+            .bg(CURRENT_THEME.editor_text_bg),
     };
     spans.push(Span::styled(run.to_string(), style));
 }
