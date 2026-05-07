@@ -119,6 +119,7 @@ fn restore_terminal(terminal: &mut TerminalUi) -> io::Result<()> {
 
 fn run(terminal: &mut TerminalUi, app: &mut App) -> io::Result<()> {
     loop {
+        app.tick_browser_preview();
         terminal.draw(|frame| ui::draw(frame, app))?;
 
         if event::poll(Duration::from_millis(120))? {

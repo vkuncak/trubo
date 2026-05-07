@@ -2,6 +2,7 @@ use std::{
     fs, io,
     path::{Path, PathBuf},
     process::Command,
+    time::{Duration, Instant},
 };
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -156,6 +157,7 @@ pub struct Geometry {
 
 pub const MIN_BROWSER_PANE_WIDTH: u16 = 18;
 pub const MIN_EDITOR_PANE_WIDTH: u16 = 24;
+const BROWSER_PREVIEW_DELAY: Duration = Duration::from_millis(200);
 
 #[derive(Debug)]
 pub struct App {
@@ -173,6 +175,7 @@ pub struct App {
     pub status: String,
     pub browser_pane_width: u16,
     pub geometry: Geometry,
+    browser_preview_due_at: Option<Instant>,
     drag_target: Option<DragTarget>,
 }
 
@@ -202,6 +205,7 @@ impl App {
             status: "Ready".to_string(),
             browser_pane_width: 30,
             geometry: Geometry::default(),
+            browser_preview_due_at: None,
             drag_target: None,
         }
     }
@@ -211,6 +215,7 @@ impl App {
         if self.selected_entry >= self.entries.len() {
             self.selected_entry = self.entries.len().saturating_sub(1);
         }
+        self.schedule_browser_preview();
     }
 
     pub fn toggle_focus(&mut self) {
@@ -219,13 +224,60 @@ impl App {
             Focus::Browser => Focus::Editor,
             Focus::Editor => Focus::Browser,
         };
+        if self.focus == Focus::Browser {
+            self.schedule_browser_preview();
+        }
         self.status = format!("Focus: {}", self.focus_name());
     }
 
     fn set_focus(&mut self, focus: Focus) {
         self.close_menu();
         self.focus = focus;
+        if self.focus == Focus::Browser {
+            self.schedule_browser_preview();
+        }
         self.status = format!("Focus: {}", self.focus_name());
+    }
+
+    pub fn tick_browser_preview(&mut self) {
+        let Some(due) = self.browser_preview_due_at else {
+            return;
+        };
+
+        if Instant::now() < due
+            || self.focus != Focus::Browser
+            || self.menu_open
+            || self.help_open
+            || self.dialog.is_some()
+            || self.editor.is_dirty()
+        {
+            return;
+        }
+
+        self.browser_preview_due_at = None;
+
+        let Some(entry) = self.entries.get(self.selected_entry) else {
+            return;
+        };
+
+        if entry.is_directory() {
+            return;
+        }
+
+        if self.editor.path() == Some(entry.path.as_path()) {
+            return;
+        }
+
+        let path = entry.path.clone();
+        match Editor::open(&path) {
+            Ok(editor) => {
+                self.editor = editor;
+                self.status = format!("Previewed {}", path.display());
+            }
+            Err(error) => {
+                self.status = format!("Preview failed: {error}");
+            }
+        }
     }
 
     pub fn focus_name(&self) -> &'static str {
@@ -685,9 +737,9 @@ impl App {
         match key.code {
             KeyCode::Up => self.select_previous_entry(),
             KeyCode::Down => self.select_next_entry(),
-            KeyCode::Home => self.selected_entry = 0,
+            KeyCode::Home => self.set_selected_entry(0),
             KeyCode::End => {
-                self.selected_entry = self.entries.len().saturating_sub(1);
+                self.set_selected_entry(self.entries.len().saturating_sub(1));
             }
             KeyCode::Enter => self.open_selected_file(),
             KeyCode::Backspace => {
@@ -744,13 +796,25 @@ impl App {
     }
 
     fn select_previous_entry(&mut self) {
-        self.selected_entry = self.selected_entry.saturating_sub(1);
+        self.set_selected_entry(self.selected_entry.saturating_sub(1));
     }
 
     fn select_next_entry(&mut self) {
         if !self.entries.is_empty() {
-            self.selected_entry = (self.selected_entry + 1).min(self.entries.len() - 1);
+            self.set_selected_entry((self.selected_entry + 1).min(self.entries.len() - 1));
         }
+    }
+
+    fn set_selected_entry(&mut self, index: usize) {
+        let clamped = index.min(self.entries.len().saturating_sub(1));
+        if clamped != self.selected_entry {
+            self.selected_entry = clamped;
+            self.schedule_browser_preview();
+        }
+    }
+
+    fn schedule_browser_preview(&mut self) {
+        self.browser_preview_due_at = Some(Instant::now() + BROWSER_PREVIEW_DELAY);
     }
 
     fn select_entry_at(&mut self, row: u16) {
@@ -764,9 +828,10 @@ impl App {
             .saturating_sub(visible_rows.saturating_sub(1));
         let clicked = start + row.saturating_sub(self.geometry.browser_inner.y) as usize;
 
-        if let Some(entry) = self.entries.get(clicked) {
-            self.selected_entry = clicked;
-            self.status = format!("Selected {}", entry.label);
+        if clicked < self.entries.len() {
+            let label = self.entries[clicked].label.clone();
+            self.set_selected_entry(clicked);
+            self.status = format!("Selected {label}");
             self.open_selected_file();
         }
     }
