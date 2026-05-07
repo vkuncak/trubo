@@ -133,6 +133,7 @@ pub enum Focus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dialog {
     About,
+    ConfirmExit { dirty: bool, selection: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -351,8 +352,41 @@ impl App {
     }
 
     pub fn handle_dialog_key(&mut self, _key: KeyEvent) -> Action {
-        self.dialog = None;
-        Action::None
+        let Some(dialog) = self.dialog else {
+            return Action::None;
+        };
+
+        match dialog {
+            Dialog::About => {
+                self.dialog = None;
+                Action::None
+            }
+            Dialog::ConfirmExit { .. } => match _key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => Action::Quit,
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    self.dialog = None;
+                    self.status = "Exit cancelled".to_string();
+                    Action::None
+                }
+                _ => Action::None,
+            },
+        }
+    }
+
+    pub fn request_quit(&mut self) -> Action {
+        self.close_menu();
+        self.help_open = false;
+
+        let dirty = self.editor.is_dirty();
+        let selection = self.editor.has_selection();
+
+        if dirty || selection {
+            self.dialog = Some(Dialog::ConfirmExit { dirty, selection });
+            self.status = "Confirm exit: unsaved edits or active selection".to_string();
+            return Action::None;
+        }
+
+        Action::Quit
     }
 
     pub fn open_menu(&mut self) {
@@ -456,7 +490,7 @@ impl App {
             MenuAction::None => {}
             MenuAction::Open => self.open_selected_file(),
             MenuAction::Save => self.save_current(),
-            MenuAction::Quit => return Action::Quit,
+            MenuAction::Quit => return self.request_quit(),
             MenuAction::Copy => self.copy_selection(),
             MenuAction::Cut => self.cut_selection(),
             MenuAction::Paste => self.paste_from_clipboard(),

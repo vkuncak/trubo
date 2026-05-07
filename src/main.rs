@@ -144,12 +144,6 @@ fn run(terminal: &mut TerminalUi, app: &mut App) -> io::Result<()> {
 }
 
 fn handle_key(app: &mut App, key: KeyEvent) -> Action {
-    if key.modifiers.contains(KeyModifiers::CONTROL)
-        && matches!(key.code, KeyCode::Char('q') | KeyCode::Char('Q'))
-    {
-        return Action::Quit;
-    }
-
     if app.help_open {
         app.help_open = false;
         return Action::None;
@@ -161,6 +155,12 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
 
     if app.menu_open {
         return app.handle_menu_key(key);
+    }
+
+    if key.modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(key.code, KeyCode::Char('q') | KeyCode::Char('Q'))
+    {
+        return app.request_quit();
     }
 
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char(' ') {
@@ -185,9 +185,6 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
     }
 
     match key.code {
-        KeyCode::Esc => {
-            return Action::Quit;
-        }
         KeyCode::Insert if key.modifiers.contains(KeyModifiers::SHIFT) => app.paste_from_clipboard(),
         KeyCode::Delete if key.modifiers.contains(KeyModifiers::SHIFT) => app.cut_selection(),
         KeyCode::F(1) => app.help_open = true,

@@ -488,6 +488,7 @@ fn draw_dialog(frame: &mut Frame, dialog: Dialog, area: Rect) {
     frame.render_widget(Clear, area);
     let title = match dialog {
         Dialog::About => " About trubo ",
+        Dialog::ConfirmExit { .. } => " Confirm Exit ",
     };
     let block = Block::default()
         .title(title)
@@ -511,6 +512,27 @@ fn draw_dialog(frame: &mut Frame, dialog: Dialog, area: Rect) {
             Line::from(""),
             Line::from("Press any key to return."),
         ]),
+        Dialog::ConfirmExit { dirty, selection } => {
+            let reason = match (dirty, selection) {
+                (true, true) => "Unsaved changes and a selection are active.",
+                (true, false) => "Unsaved changes are present.",
+                (false, true) => "A text selection is active.",
+                (false, false) => "",
+            };
+
+            Text::from(vec![
+                Line::from(""),
+                Line::from(vec![Span::styled(
+                    "Exit trubo now?",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )]),
+                Line::from(""),
+                Line::from(reason),
+                Line::from(""),
+                Line::from("Y / Enter = Exit"),
+                Line::from("N / Esc = Stay in editor"),
+            ])
+        }
     };
 
     frame.render_widget(
