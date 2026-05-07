@@ -10,19 +10,72 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
 
-const DOS_BLUE: Color = Color::Rgb(0, 0, 170);
-const DOS_CYAN: Color = Color::Rgb(0, 170, 170);
-const DOS_GRAY: Color = Color::Rgb(170, 170, 170);
-const DOS_DARK_GRAY: Color = Color::Rgb(85, 85, 85);
-const DOS_YELLOW: Color = Color::Rgb(255, 255, 85);
-const DOS_WHITE: Color = Color::Rgb(255, 255, 255);
-const DOS_BLACK: Color = Color::Rgb(0, 0, 0);
-const DOS_RED: Color = Color::Rgb(170, 0, 0);
-const DOS_BRIGHT_RED: Color = Color::Rgb(255, 85, 85);
+struct Theme {
+    app_background: Color,
+    panel_background: Color,
+    panel_border_inactive: Color,
+    panel_border_active: Color,
+    panel_text_primary: Color,
+    panel_text_secondary: Color,
+    panel_text_muted: Color,
+    panel_title_text: Color,
+    menu_brand_bg: Color,
+    menu_brand_fg: Color,
+    menu_bar_bg: Color,
+    menu_bar_fg: Color,
+    menu_hotkey_fg: Color,
+    menu_active_bg: Color,
+    menu_active_fg: Color,
+    menu_active_hotkey_fg: Color,
+    status_bar_bg: Color,
+    status_bar_fg: Color,
+    status_hotkey_fg: Color,
+    selected_bg: Color,
+    selected_fg: Color,
+    editor_text_fg: Color,
+    editor_text_bg: Color,
+    editor_line_number_fg: Color,
+    editor_line_number_bg: Color,
+    editor_selection_bg: Color,
+    editor_selection_fg: Color,
+}
+
+const CURRENT_THEME: Theme = Theme {
+    app_background: Color::Rgb(200, 200, 200),
+    panel_background: Color::Rgb(255, 255, 255),
+    panel_border_inactive: Color::Rgb(250, 250, 250),
+    panel_border_active: Color::Rgb(55, 155, 0),
+    panel_text_primary: Color::Rgb(200, 200, 200),
+    panel_text_secondary: Color::Rgb(0, 20, 20),
+    panel_text_muted: Color::Rgb(85, 85, 85),
+    panel_title_text: Color::Rgb(0, 0, 80),
+    menu_brand_bg: Color::Rgb(85, 85, 85),
+    menu_brand_fg: Color::Rgb(255, 255, 85),
+    menu_bar_bg: Color::Rgb(170, 170, 170),
+    menu_bar_fg: Color::Rgb(0, 0, 0),
+    menu_hotkey_fg: Color::Rgb(170, 0, 0),
+    menu_active_bg: Color::Rgb(0, 170, 170),
+    menu_active_fg: Color::Rgb(0, 0, 0),
+    menu_active_hotkey_fg: Color::Rgb(170, 0, 0),
+    status_bar_bg: Color::Rgb(170, 170, 170),
+    status_bar_fg: Color::Rgb(0, 0, 0),
+    status_hotkey_fg: Color::Rgb(170, 0, 0),
+    selected_bg: Color::Rgb(0, 170, 170),
+    selected_fg: Color::Rgb(0, 0, 0),
+    editor_text_fg: Color::Rgb(0, 0, 0),
+    editor_text_bg: Color::Rgb(255, 255, 255),
+    editor_line_number_fg: Color::Rgb(0, 60, 0),
+    editor_line_number_bg: Color::Rgb(200, 200, 200),
+    editor_selection_bg: Color::Rgb(0, 210, 230),
+    editor_selection_fg: Color::Rgb(0, 0, 0),
+};
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let root = frame.area();
-    frame.render_widget(Block::default().style(Style::default().bg(DOS_BLUE)), root);
+    frame.render_widget(
+        Block::default().style(Style::default().bg(CURRENT_THEME.app_background)),
+        root,
+    );
 
     let vertical = Layout::default()
         .direction(Direction::Vertical)
@@ -55,8 +108,8 @@ fn draw_menu(frame: &mut Frame, area: Rect, app: &mut App) {
     let mut spans = vec![Span::styled(
         " trubo ",
         Style::default()
-            .fg(DOS_YELLOW)
-            .bg(DOS_DARK_GRAY)
+            .fg(CURRENT_THEME.menu_brand_fg)
+            .bg(CURRENT_THEME.menu_brand_bg)
             .add_modifier(Modifier::BOLD),
     )];
     let mut x = area.x + " trubo ".len() as u16;
@@ -77,21 +130,23 @@ fn draw_menu(frame: &mut Frame, area: Rect, app: &mut App) {
 
         let style = if active {
             Style::default()
-                .fg(DOS_BLACK)
-                .bg(DOS_CYAN)
+                .fg(CURRENT_THEME.menu_active_fg)
+                .bg(CURRENT_THEME.menu_active_bg)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(DOS_BLACK).bg(DOS_GRAY)
+            Style::default()
+                .fg(CURRENT_THEME.menu_bar_fg)
+                .bg(CURRENT_THEME.menu_bar_bg)
         };
         let hot_style = if active {
             Style::default()
-                .fg(DOS_RED)
-                .bg(DOS_CYAN)
+                .fg(CURRENT_THEME.menu_active_hotkey_fg)
+                .bg(CURRENT_THEME.menu_active_bg)
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
-                .fg(DOS_RED)
-                .bg(DOS_GRAY)
+                .fg(CURRENT_THEME.menu_hotkey_fg)
+                .bg(CURRENT_THEME.menu_bar_bg)
                 .add_modifier(Modifier::BOLD)
         };
 
@@ -101,7 +156,11 @@ fn draw_menu(frame: &mut Frame, area: Rect, app: &mut App) {
     }
 
     frame.render_widget(
-        Paragraph::new(Line::from(spans)).style(Style::default().fg(DOS_BLACK).bg(DOS_GRAY)),
+        Paragraph::new(Line::from(spans)).style(
+            Style::default()
+                .fg(CURRENT_THEME.menu_bar_fg)
+                .bg(CURRENT_THEME.menu_bar_bg),
+        ),
         area,
     );
 }
@@ -136,8 +195,16 @@ fn draw_menu_dropdown(frame: &mut Frame, app: &mut App) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Double)
-        .border_style(Style::default().fg(DOS_YELLOW).bg(DOS_CYAN))
-        .style(Style::default().fg(DOS_BLACK).bg(DOS_GRAY));
+        .border_style(
+            Style::default()
+                .fg(CURRENT_THEME.panel_border_active)
+                .bg(CURRENT_THEME.menu_active_bg),
+        )
+        .style(
+            Style::default()
+                .fg(CURRENT_THEME.menu_bar_fg)
+                .bg(CURRENT_THEME.menu_bar_bg),
+        );
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -149,27 +216,31 @@ fn draw_menu_dropdown(frame: &mut Frame, app: &mut App) {
             if item.separator {
                 Line::from(Span::styled(
                     "-".repeat(inner.width as usize),
-                    Style::default().fg(DOS_DARK_GRAY).bg(DOS_GRAY),
+                    Style::default()
+                        .fg(CURRENT_THEME.panel_text_muted)
+                        .bg(CURRENT_THEME.menu_bar_bg),
                 ))
             } else {
                 let active = index == app.active_menu_item;
                 let style = if active {
                     Style::default()
-                        .fg(DOS_WHITE)
-                        .bg(DOS_BLUE)
+                        .fg(CURRENT_THEME.editor_text_fg)
+                        .bg(CURRENT_THEME.editor_text_bg)
                         .add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(DOS_BLACK).bg(DOS_GRAY)
+                    Style::default()
+                        .fg(CURRENT_THEME.menu_bar_fg)
+                        .bg(CURRENT_THEME.menu_bar_bg)
                 };
                 let hot_style = if active {
                     Style::default()
-                        .fg(DOS_BRIGHT_RED)
-                        .bg(DOS_BLUE)
+                        .fg(CURRENT_THEME.status_hotkey_fg)
+                        .bg(CURRENT_THEME.editor_text_bg)
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
-                        .fg(DOS_RED)
-                        .bg(DOS_GRAY)
+                        .fg(CURRENT_THEME.menu_hotkey_fg)
+                        .bg(CURRENT_THEME.menu_bar_bg)
                         .add_modifier(Modifier::BOLD)
                 };
                 let shortcut_gap = inner
@@ -193,7 +264,11 @@ fn draw_menu_dropdown(frame: &mut Frame, app: &mut App) {
         .collect::<Vec<_>>();
 
     frame.render_widget(
-        Paragraph::new(lines).style(Style::default().fg(DOS_BLACK).bg(DOS_GRAY)),
+        Paragraph::new(lines).style(
+            Style::default()
+                .fg(CURRENT_THEME.menu_bar_fg)
+                .bg(CURRENT_THEME.menu_bar_bg),
+        ),
         inner,
     );
 }
@@ -244,7 +319,11 @@ fn draw_browser(frame: &mut Frame, area: Rect, app: &mut App) {
                 Line::from(""),
                 Line::from("Use arrows to browse."),
             ]))
-            .style(Style::default().fg(DOS_WHITE).bg(DOS_BLUE))
+            .style(
+                Style::default()
+                    .fg(CURRENT_THEME.panel_text_primary)
+                    .bg(CURRENT_THEME.panel_background),
+            )
             .alignment(Alignment::Center),
             inner,
         );
@@ -263,13 +342,17 @@ fn draw_browser(frame: &mut Frame, area: Rect, app: &mut App) {
         .map(|(index, entry)| {
             let style = if index == selected {
                 Style::default()
-                    .fg(DOS_BLACK)
-                    .bg(DOS_CYAN)
+                    .fg(CURRENT_THEME.selected_fg)
+                    .bg(CURRENT_THEME.selected_bg)
                     .add_modifier(Modifier::BOLD)
             } else if entry.is_directory() {
-                Style::default().fg(DOS_YELLOW).bg(DOS_BLUE)
+                Style::default()
+                    .fg(CURRENT_THEME.panel_title_text)
+                    .bg(CURRENT_THEME.panel_background)
             } else {
-                Style::default().fg(DOS_WHITE).bg(DOS_BLUE)
+                Style::default()
+                    .fg(CURRENT_THEME.panel_text_primary)
+                    .bg(CURRENT_THEME.panel_background)
             };
             let label = if entry.is_directory() {
                 format!("[D] {}", entry.label)
@@ -283,7 +366,10 @@ fn draw_browser(frame: &mut Frame, area: Rect, app: &mut App) {
         })
         .collect::<Vec<_>>();
 
-    frame.render_widget(List::new(items).style(Style::default().bg(DOS_BLUE)), inner);
+    frame.render_widget(
+        List::new(items).style(Style::default().bg(CURRENT_THEME.panel_background)),
+        inner,
+    );
 
     draw_browser_log(frame, split[1], app);
 }
@@ -291,22 +377,34 @@ fn draw_browser(frame: &mut Frame, area: Rect, app: &mut App) {
 fn draw_browser_log(frame: &mut Frame, area: Rect, app: &App) {
     let block = Block::default()
         .title(" Log ")
-        .title_style(Style::default().fg(DOS_YELLOW).bg(DOS_BLUE))
+        .title_style(
+            Style::default()
+                .fg(CURRENT_THEME.panel_title_text)
+                .bg(CURRENT_THEME.panel_background),
+        )
         .borders(Borders::ALL)
         .border_type(BorderType::Double)
-        .border_style(Style::default().fg(DOS_WHITE).bg(DOS_BLUE))
-        .style(Style::default().bg(DOS_BLUE));
+        .border_style(
+            Style::default()
+                .fg(CURRENT_THEME.panel_border_inactive)
+                .bg(CURRENT_THEME.panel_background),
+        )
+        .style(Style::default().bg(CURRENT_THEME.panel_background));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     let log_lines = Text::from(vec![
         Line::from(Span::styled(
             truncate(&app.status, inner.width),
-            Style::default().fg(DOS_WHITE).bg(DOS_BLUE),
+            Style::default()
+                .fg(CURRENT_THEME.panel_text_primary)
+                .bg(CURRENT_THEME.panel_background),
         )),
         Line::from(Span::styled(
             truncate(&format!("Dir: {}", app.browser_label()), inner.width),
-            Style::default().fg(DOS_CYAN).bg(DOS_BLUE),
+            Style::default()
+                .fg(CURRENT_THEME.panel_text_secondary)
+                .bg(CURRENT_THEME.panel_background),
         )),
     ]);
 
@@ -348,7 +446,9 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
             );
             spans.push(Span::styled(
                 number,
-                Style::default().fg(DOS_YELLOW).bg(DOS_BLUE),
+                Style::default()
+                    .fg(CURRENT_THEME.editor_line_number_fg)
+                    .bg(CURRENT_THEME.editor_line_number_bg),
             ));
 
             spans.extend(render_editor_line(
@@ -361,14 +461,20 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
         } else {
             spans.push(Span::styled(
                 "~".repeat(line_number_width as usize),
-                Style::default().fg(DOS_DARK_GRAY).bg(DOS_BLUE),
+                Style::default()
+                    .fg(CURRENT_THEME.panel_text_muted)
+                    .bg(CURRENT_THEME.editor_text_bg),
             ));
         }
         lines.push(Line::from(spans));
     }
 
     frame.render_widget(
-        Paragraph::new(lines).style(Style::default().fg(DOS_WHITE).bg(DOS_BLUE)),
+        Paragraph::new(lines).style(
+            Style::default()
+                .fg(CURRENT_THEME.editor_text_fg)
+                .bg(CURRENT_THEME.editor_text_bg),
+        ),
         inner,
     );
 
@@ -386,12 +492,12 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
 
 fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
     let base = Style::default()
-        .fg(DOS_BLACK)
-        .bg(DOS_GRAY)
+        .fg(CURRENT_THEME.status_bar_fg)
+        .bg(CURRENT_THEME.status_bar_bg)
         .add_modifier(Modifier::BOLD);
     let key = Style::default()
-        .fg(DOS_RED)
-        .bg(DOS_GRAY)
+        .fg(CURRENT_THEME.status_hotkey_fg)
+        .bg(CURRENT_THEME.status_bar_bg)
         .add_modifier(Modifier::BOLD);
     let position = format!(
         "Ln {}, Col {}",
@@ -446,8 +552,16 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         .title(" Help ")
         .borders(Borders::ALL)
         .border_type(BorderType::Double)
-        .border_style(Style::default().fg(DOS_YELLOW).bg(DOS_CYAN))
-        .style(Style::default().fg(DOS_BLACK).bg(DOS_GRAY));
+        .border_style(
+            Style::default()
+                .fg(CURRENT_THEME.panel_border_active)
+                .bg(CURRENT_THEME.menu_active_bg),
+        )
+        .style(
+            Style::default()
+                .fg(CURRENT_THEME.menu_bar_fg)
+                .bg(CURRENT_THEME.menu_bar_bg),
+        );
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -477,7 +591,11 @@ fn draw_help(frame: &mut Frame, area: Rect) {
     ]);
     frame.render_widget(
         Paragraph::new(text)
-            .style(Style::default().fg(DOS_BLACK).bg(DOS_GRAY))
+            .style(
+                Style::default()
+                    .fg(CURRENT_THEME.menu_bar_fg)
+                    .bg(CURRENT_THEME.menu_bar_bg),
+            )
             .alignment(Alignment::Left)
             .wrap(Wrap { trim: true }),
         inner,
@@ -494,8 +612,16 @@ fn draw_dialog(frame: &mut Frame, dialog: Dialog, area: Rect) {
         .title(title)
         .borders(Borders::ALL)
         .border_type(BorderType::Double)
-        .border_style(Style::default().fg(DOS_YELLOW).bg(DOS_CYAN))
-        .style(Style::default().fg(DOS_BLACK).bg(DOS_GRAY));
+        .border_style(
+            Style::default()
+                .fg(CURRENT_THEME.panel_border_active)
+                .bg(CURRENT_THEME.menu_active_bg),
+        )
+        .style(
+            Style::default()
+                .fg(CURRENT_THEME.menu_bar_fg)
+                .bg(CURRENT_THEME.menu_bar_bg),
+        );
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -537,7 +663,11 @@ fn draw_dialog(frame: &mut Frame, dialog: Dialog, area: Rect) {
 
     frame.render_widget(
         Paragraph::new(text)
-            .style(Style::default().fg(DOS_BLACK).bg(DOS_GRAY))
+            .style(
+                Style::default()
+                    .fg(CURRENT_THEME.menu_bar_fg)
+                    .bg(CURRENT_THEME.menu_bar_bg),
+            )
             .alignment(Alignment::Center)
             .wrap(Wrap { trim: true }),
         inner,
@@ -552,30 +682,40 @@ fn retro_block<'a>(
 ) -> Block<'a> {
     let border = if active {
         Style::default()
-            .fg(DOS_YELLOW)
-            .bg(DOS_BLUE)
+            .fg(CURRENT_THEME.panel_border_active)
+            .bg(CURRENT_THEME.panel_background)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(DOS_WHITE).bg(DOS_BLUE)
+        Style::default()
+            .fg(CURRENT_THEME.panel_border_inactive)
+            .bg(CURRENT_THEME.panel_background)
     };
 
     let mut block = Block::default()
         .title(title)
-        .title_style(Style::default().fg(DOS_YELLOW).bg(DOS_BLUE))
+        .title_style(
+            Style::default()
+                .fg(CURRENT_THEME.panel_title_text)
+                .bg(CURRENT_THEME.panel_background),
+        )
         .borders(Borders::ALL)
         .border_type(BorderType::Double)
         .border_style(border)
-        .style(Style::default().bg(DOS_BLUE))
+        .style(Style::default().bg(CURRENT_THEME.panel_background))
         .title_bottom(Line::from(Span::styled(
             left,
-            Style::default().fg(DOS_YELLOW).bg(DOS_BLUE),
+            Style::default()
+                .fg(CURRENT_THEME.panel_title_text)
+                .bg(CURRENT_THEME.panel_background),
         )));
 
     if let Some(right) = right {
         block = block.title_bottom(
             Line::from(Span::styled(
                 right,
-                Style::default().fg(DOS_CYAN).bg(DOS_BLUE),
+                Style::default()
+                    .fg(CURRENT_THEME.panel_text_secondary)
+                    .bg(CURRENT_THEME.panel_background),
             ))
             .right_aligned(),
         );
@@ -656,11 +796,13 @@ fn render_editor_line(
 fn push_editor_run(spans: &mut Vec<Span<'static>>, run: &str, selected: bool) {
     let style = if selected {
         Style::default()
-            .fg(DOS_BLUE)
-            .bg(DOS_YELLOW)
+            .fg(CURRENT_THEME.editor_selection_fg)
+            .bg(CURRENT_THEME.editor_selection_bg)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(DOS_WHITE).bg(DOS_BLUE)
+        Style::default()
+            .fg(CURRENT_THEME.editor_text_fg)
+            .bg(CURRENT_THEME.editor_text_bg)
     };
     spans.push(Span::styled(run.to_string(), style));
 }
