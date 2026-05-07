@@ -1,6 +1,6 @@
 # trubo
 
-trubo is a retro TUI text editor inspired by classic blue-screen DOS tools.
+trubo is a retro TUI text editor.
 
 Status: experimental nostalgia project. It edits text files, browses
 directories, and keeps the UI intentionally loud.

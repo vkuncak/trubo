@@ -30,6 +30,7 @@ pub struct Editor {
     cursor_row: usize,
     cursor_col: usize,
     row_offset: usize,
+    row_segment_offset: usize,
     col_offset: usize,
     viewport_rows: usize,
     viewport_cols: usize,
@@ -45,6 +46,7 @@ impl Editor {
             cursor_row: 0,
             cursor_col: 0,
             row_offset: 0,
+            row_segment_offset: 0,
             col_offset: 0,
             viewport_rows: 18,
             viewport_cols: 72,
@@ -66,6 +68,7 @@ impl Editor {
             cursor_row: 0,
             cursor_col: 0,
             row_offset: 0,
+            row_segment_offset: 0,
             col_offset: 0,
             viewport_rows: 18,
             viewport_cols: 72,
@@ -102,6 +105,10 @@ impl Editor {
 
     pub fn row_offset(&self) -> usize {
         self.row_offset
+    }
+
+    pub fn row_segment_offset(&self) -> usize {
+        self.row_segment_offset
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -390,11 +397,19 @@ impl Editor {
         self.viewport_rows = rows;
         self.viewport_cols = cols;
 
-        if self.cursor_row < self.row_offset {
-            self.row_offset = self.cursor_row;
-        } else if rows > 0 && self.cursor_row >= self.row_offset + rows {
-            self.row_offset = self.cursor_row.saturating_sub(rows - 1);
+        let cols = cols.max(1);
+        let cursor_abs = self.abs_visual_row(self.cursor_row, self.cursor_col / cols, cols);
+        let mut top_abs = self.abs_visual_row(self.row_offset, self.row_segment_offset, cols);
+
+        if cursor_abs < top_abs {
+            top_abs = cursor_abs;
+        } else if rows > 0 && cursor_abs >= top_abs + rows {
+            top_abs = cursor_abs.saturating_sub(rows - 1);
         }
+
+        let (row_offset, row_segment_offset) = self.visual_row_to_offset(top_abs, cols);
+        self.row_offset = row_offset;
+        self.row_segment_offset = row_segment_offset;
 
         // Soft-wrap mode keeps rendering anchored at column 0.
         self.col_offset = 0;
@@ -417,15 +432,14 @@ impl Editor {
             Movement::Home => self.cursor_col = 0,
             Movement::End => self.cursor_col = self.line_len(self.cursor_row),
             Movement::PageUp(rows) => {
-                self.cursor_row = self.cursor_row.saturating_sub(rows);
-                self.clamp_col();
+                for _ in 0..rows {
+                    self.step_up();
+                }
             }
             Movement::PageDown(rows) => {
-                self.cursor_row = self
-                    .cursor_row
-                    .saturating_add(rows)
-                    .min(self.lines.len().saturating_sub(1));
-                self.clamp_col();
+                for _ in 0..rows {
+                    self.step_down();
+                }
             }
         }
 
@@ -554,6 +568,30 @@ impl Editor {
             .map(|line| line.chars().count())
             .unwrap_or(0)
     }
+
+    fn abs_visual_row(&self, row: usize, segment: usize, cols: usize) -> usize {
+        let mut abs = 0;
+        for idx in 0..row.min(self.lines.len()) {
+            abs += wrapped_rows(self.line_len(idx), cols);
+        }
+
+        let max_segment = wrapped_rows(self.line_len(row), cols).saturating_sub(1);
+        abs + segment.min(max_segment)
+    }
+
+    fn visual_row_to_offset(&self, mut abs: usize, cols: usize) -> (usize, usize) {
+        for row in 0..self.lines.len() {
+            let rows = wrapped_rows(self.line_len(row), cols);
+            if abs < rows {
+                return (row, abs);
+            }
+            abs -= rows;
+        }
+
+        let last_row = self.lines.len().saturating_sub(1);
+        let last_segment = wrapped_rows(self.line_len(last_row), cols).saturating_sub(1);
+        (last_row, last_segment)
+    }
 }
 
 fn normalize_newlines(text: &str) -> String {
@@ -666,5 +704,52 @@ mod tests {
         editor.move_up();
         assert_eq!(editor.cursor_row(), 0);
         assert_eq!(editor.cursor_col(), 1);
+    }
+
+    #[test]
+    fn page_down_moves_by_wrapped_visual_rows() {
+        let mut editor = Editor::scratch();
+        editor.insert_text("abcdefghij\nxy");
+        editor.set_viewport(10, 4);
+        editor.set_cursor(0, 1);
+
+        editor.page_down(2);
+        assert_eq!(editor.cursor_row(), 0);
+        assert_eq!(editor.cursor_col(), 9);
+
+        editor.page_down(1);
+        assert_eq!(editor.cursor_row(), 1);
+        assert_eq!(editor.cursor_col(), 1);
+    }
+
+    #[test]
+    fn page_up_moves_by_wrapped_visual_rows() {
+        let mut editor = Editor::scratch();
+        editor.insert_text("abcd\nabcdefghij");
+        editor.set_viewport(10, 4);
+        editor.set_cursor(1, 9);
+
+        editor.page_up(2);
+        assert_eq!(editor.cursor_row(), 1);
+        assert_eq!(editor.cursor_col(), 1);
+
+        editor.page_up(1);
+        assert_eq!(editor.cursor_row(), 0);
+        assert_eq!(editor.cursor_col(), 1);
+    }
+
+    #[test]
+    fn page_down_updates_wrapped_viewport_offset() {
+        let mut editor = Editor::scratch();
+        editor.insert_text("abcdefghijklmnopqrstuvwxyz");
+        editor.set_viewport(3, 4);
+        editor.set_cursor(0, 0);
+
+        editor.page_down(3);
+
+        assert_eq!(editor.cursor_row(), 0);
+        assert_eq!(editor.cursor_col(), 12);
+        assert_eq!(editor.row_offset(), 0);
+        assert_eq!(editor.row_segment_offset(), 1);
     }
 }

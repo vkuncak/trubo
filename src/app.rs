@@ -767,14 +767,17 @@ impl App {
         let target_screen_row = row.saturating_sub(inner.y) as usize;
         let mut remaining = target_screen_row;
         let mut file_row = self.editor.row_offset();
+        let mut segment_offset = self.editor.row_segment_offset();
 
         while let Some(line) = self.editor.lines().get(file_row) {
             let line_len = line.chars().count();
             let wrapped = line_len.max(1).div_ceil(text_cols);
-            if remaining < wrapped {
+            let visible_wrapped = wrapped.saturating_sub(segment_offset);
+            if remaining < visible_wrapped {
                 break;
             }
-            remaining -= wrapped;
+            remaining -= visible_wrapped;
+            segment_offset = 0;
             file_row += 1;
         }
 
@@ -784,7 +787,7 @@ impl App {
             file_row = file_row.min(self.editor.lines().len() - 1);
         }
 
-        let segment = remaining;
+        let segment = remaining.saturating_add(segment_offset);
         let segment_col = column.saturating_sub(text_x) as usize;
         let mut file_col = segment
             .saturating_mul(text_cols)

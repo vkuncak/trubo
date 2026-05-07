@@ -50,15 +50,15 @@ const CURRENT_THEME: Theme = Theme {
     panel_text_secondary: Color::Rgb(0, 20, 20),
     panel_text_muted: Color::Rgb(85, 85, 85),
     panel_title_text: Color::Rgb(0, 0, 80),
-    menu_brand_bg: Color::Rgb(85, 85, 85),
+    menu_brand_bg: Color::Rgb(200, 200, 200),
     menu_brand_fg: Color::Rgb(255, 255, 85),
-    menu_bar_bg: Color::Rgb(170, 170, 170),
+    menu_bar_bg: Color::Rgb(200, 200, 200),
     menu_bar_fg: Color::Rgb(0, 0, 0),
     menu_hotkey_fg: Color::Rgb(170, 0, 0),
     menu_active_bg: Color::Rgb(0, 170, 170),
     menu_active_fg: Color::Rgb(0, 0, 0),
     menu_active_hotkey_fg: Color::Rgb(170, 0, 0),
-    status_bar_bg: Color::Rgb(170, 170, 170),
+    status_bar_bg: Color::Rgb(200, 200, 200),
     status_bar_fg: Color::Rgb(0, 0, 0),
     status_hotkey_fg: Color::Rgb(170, 0, 0),
     selected_bg: Color::Rgb(0, 170, 170),
@@ -103,7 +103,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     let vertical = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(8), Constraint::Length(1)])
+        .constraints([Constraint::Length(1), Constraint::Min(8)])
         .split(root);
 
     app.geometry = Geometry {
@@ -112,9 +112,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         ..Geometry::default()
     };
 
-    draw_menu(frame, vertical[0], app);
+    if app.menu_open {
+        draw_menu(frame, vertical[0], app);
+    } else {
+        draw_file_header(frame, vertical[0], app);
+    }
     draw_desktop(frame, vertical[1], app);
-    draw_status(frame, vertical[2], app);
 
     if app.menu_open {
         draw_menu_dropdown(frame, app);
@@ -125,6 +128,45 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     } else if let Some(dialog) = app.dialog {
         draw_dialog(frame, dialog, centered(root, 60, 10));
     }
+}
+
+fn draw_file_header(frame: &mut Frame, area: Rect, app: &App) {
+    let dirty = if app.editor.is_dirty() { " *" } else { "" };
+    let label = format!(" {}{} ", app.current_file_label(), dirty);
+    let base = Style::default()
+        .fg(CURRENT_THEME.status_bar_fg)
+        .bg(CURRENT_THEME.status_bar_bg)
+        .add_modifier(Modifier::BOLD);
+    let key = Style::default()
+        .fg(CURRENT_THEME.status_hotkey_fg)
+        .bg(CURRENT_THEME.status_bar_bg)
+        .add_modifier(Modifier::BOLD);
+
+    let mut right = Line::from(vec![
+        Span::styled("F1", key),
+        Span::styled(" Help  ", base),
+        Span::styled("F10", key),
+        Span::styled(" Menu ", base),
+    ]);
+    let right_width = right.width();
+    let total_width = area.width as usize;
+
+    let mut spans = Vec::new();
+    if total_width > right_width {
+        let left_width = total_width - right_width;
+        let left = truncate(&label, left_width as u16);
+        let rendered_left = left.chars().count();
+        spans.push(Span::styled(left, base));
+        if rendered_left < left_width {
+            spans.push(Span::styled(" ".repeat(left_width - rendered_left), base));
+        }
+    }
+    spans.append(&mut right.spans);
+
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)).style(base),
+        area,
+    );
 }
 
 fn draw_menu(frame: &mut Frame, area: Rect, app: &mut App) {
@@ -329,7 +371,7 @@ fn draw_browser(frame: &mut Frame, area: Rect, app: &mut App) {
     let block = retro_block(
         &title,
         app.focus == Focus::Browser,
-        "Enter Open",
+        Some("Enter Open"),
         Some("Backspace Up"),
     );
     let inner = block.inner(split[0]);
@@ -439,9 +481,21 @@ fn draw_browser_log(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
-    let dirty = if app.editor.is_dirty() { " *" } else { "" };
-    let title = format!(" {}{} ", app.current_file_label(), dirty);
-    let block = retro_block(&title, app.focus == Focus::Editor, "Edit", Some("F2 Save"));
+    let border = if app.focus == Focus::Editor {
+        Style::default()
+            .fg(CURRENT_THEME.panel_border_active)
+            .bg(CURRENT_THEME.panel_background)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(CURRENT_THEME.panel_border_inactive)
+            .bg(CURRENT_THEME.panel_background)
+    };
+    let block = Block::default()
+        .borders(Borders::RIGHT)
+        .border_type(BorderType::Double)
+        .border_style(border)
+        .style(Style::default().bg(CURRENT_THEME.panel_background));
     let inner = block.inner(area);
     app.geometry.editor_inner = inner;
     frame.render_widget(block, area);
@@ -452,7 +506,9 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
     app.editor.set_viewport(text_rows, text_cols);
 
     let mut lines = Vec::with_capacity(text_rows);
+    let mut wrap_marker_rows = Vec::new();
     let row_offset = app.editor.row_offset();
+    let mut segment_offset = app.editor.row_segment_offset();
     let mut file_row = row_offset;
     while lines.len() < text_rows {
         if let Some(line) = app.editor.lines().get(file_row) {
@@ -465,7 +521,7 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
                 .is_some_and(|(start, end)| file_row > start.row && file_row < end.row);
             let selection = app.editor.selection_range_for_line(file_row);
 
-            for segment in 0..wrapped {
+            for segment in segment_offset..wrapped {
                 if lines.len() >= text_rows {
                     break;
                 }
@@ -495,9 +551,14 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
                     full_width_selected,
                     &token_kinds,
                 ));
+
+                if segment + 1 < wrapped {
+                    wrap_marker_rows.push(lines.len());
+                }
                 lines.push(Line::from(spans));
             }
 
+            segment_offset = 0;
             file_row += 1;
         } else {
             let mut spans = Vec::new();
@@ -527,68 +588,53 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
         inner,
     );
 
+    if area.width > 0 {
+        let border_x = area.x + area.width.saturating_sub(1);
+        for screen_row in wrap_marker_rows {
+            let marker_area = Rect {
+                x: border_x,
+                y: inner.y + screen_row as u16,
+                width: 1,
+                height: 1,
+            };
+            frame.render_widget(
+                Paragraph::new("↩").style(border),
+                marker_area,
+            );
+        }
+    }
+
     if app.focus == Focus::Editor {
         let cursor_segment = app.editor.cursor_col() / text_cols;
         let cursor_x = inner.x + line_number_width + (app.editor.cursor_col() % text_cols) as u16;
-        let wrapped_before_cursor = app
-            .editor
-            .lines()
-            .iter()
-            .enumerate()
-            .skip(row_offset)
-            .take(app.editor.cursor_row().saturating_sub(row_offset))
-            .map(|(_, line)| wrapped_rows(line.chars().count(), text_cols))
-            .sum::<usize>();
-        let cursor_y = inner.y + wrapped_before_cursor as u16 + cursor_segment as u16;
+        let mut visual_from_top = 0usize;
+        if app.editor.cursor_row() == row_offset {
+            visual_from_top = cursor_segment.saturating_sub(app.editor.row_segment_offset());
+        } else if app.editor.cursor_row() > row_offset {
+            let first_wrapped = app
+                .editor
+                .lines()
+                .get(row_offset)
+                .map(|line| wrapped_rows(line.chars().count(), text_cols))
+                .unwrap_or(1);
+            visual_from_top += first_wrapped.saturating_sub(app.editor.row_segment_offset());
+            visual_from_top += app
+                .editor
+                .lines()
+                .iter()
+                .enumerate()
+                .skip(row_offset + 1)
+                .take(app.editor.cursor_row().saturating_sub(row_offset + 1))
+                .map(|(_, line)| wrapped_rows(line.chars().count(), text_cols))
+                .sum::<usize>();
+            visual_from_top += cursor_segment;
+        }
+
+        let cursor_y = inner.y + visual_from_top as u16;
         if cursor_x < inner.x + inner.width && cursor_y < inner.y + inner.height {
             frame.set_cursor_position((cursor_x, cursor_y));
         }
     }
-}
-
-fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
-    let base = Style::default()
-        .fg(CURRENT_THEME.status_bar_fg)
-        .bg(CURRENT_THEME.status_bar_bg)
-        .add_modifier(Modifier::BOLD);
-    let key = Style::default()
-        .fg(CURRENT_THEME.status_hotkey_fg)
-        .bg(CURRENT_THEME.status_bar_bg)
-        .add_modifier(Modifier::BOLD);
-    let position = format!(
-        "Ln {}, Col {}",
-        app.editor.cursor_row() + 1,
-        app.editor.cursor_col() + 1
-    );
-    let selection = if app.editor.has_selection() { "  Sel" } else { "" };
-    let select_mode = if app.selection_mode { "  SelMode" } else { "" };
-    let suffix = format!("  {position}{selection}{select_mode} ");
-    let mut line = Line::from(vec![
-        Span::styled(" ", base),
-        Span::styled("F1", key),
-        Span::styled(" Help  ", base),
-        Span::styled("F2", key),
-        Span::styled(" Save  ", base),
-        Span::styled("F3", key),
-        Span::styled(" Open  ", base),
-        Span::styled("F4", key),
-        Span::styled(" Focus  ", base),
-        Span::styled("F5", key),
-        Span::styled(" Run  ", base),
-        Span::styled("Ctrl+Sp", key),
-        Span::styled(" Select  ", base),
-        Span::styled("F9", key),
-        Span::styled(" Build  ", base),
-        Span::styled("F10", key),
-        Span::styled(" Menu", base),
-        Span::styled(suffix, base),
-    ]);
-    let width = line.width();
-    if width < area.width as usize {
-        line.spans
-            .push(Span::styled(" ".repeat(area.width as usize - width), base));
-    }
-    frame.render_widget(Paragraph::new(line).style(base), area);
 }
 
 fn clamp_browser_width(total_width: u16, current: u16) -> u16 {
@@ -733,7 +779,7 @@ fn draw_dialog(frame: &mut Frame, dialog: Dialog, area: Rect) {
 fn retro_block<'a>(
     title: &'a str,
     active: bool,
-    left: &'a str,
+    left: Option<&'a str>,
     right: Option<&'a str>,
 ) -> Block<'a> {
     let border = if active {
@@ -754,16 +800,19 @@ fn retro_block<'a>(
                 .fg(CURRENT_THEME.panel_title_text)
                 .bg(CURRENT_THEME.panel_background),
         )
-        .borders(Borders::ALL)
+        .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
         .border_type(BorderType::Double)
         .border_style(border)
-        .style(Style::default().bg(CURRENT_THEME.panel_background))
-        .title_bottom(Line::from(Span::styled(
+        .style(Style::default().bg(CURRENT_THEME.panel_background));
+
+    if let Some(left) = left {
+        block = block.title_bottom(Line::from(Span::styled(
             left,
             Style::default()
                 .fg(CURRENT_THEME.panel_title_text)
                 .bg(CURRENT_THEME.panel_background),
         )));
+    }
 
     if let Some(right) = right {
         block = block.title_bottom(
