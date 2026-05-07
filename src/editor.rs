@@ -104,10 +104,6 @@ impl Editor {
         self.row_offset
     }
 
-    pub fn col_offset(&self) -> usize {
-        self.col_offset
-    }
-
     pub fn is_dirty(&self) -> bool {
         self.dirty
     }
@@ -400,11 +396,8 @@ impl Editor {
             self.row_offset = self.cursor_row.saturating_sub(rows - 1);
         }
 
-        if self.cursor_col < self.col_offset {
-            self.col_offset = self.cursor_col;
-        } else if cols > 0 && self.cursor_col >= self.col_offset + cols {
-            self.col_offset = self.cursor_col.saturating_sub(cols - 1);
-        }
+        // Soft-wrap mode keeps rendering anchored at column 0.
+        self.col_offset = 0;
     }
 
     fn move_cursor(&mut self, movement: Movement, selecting: bool) {
@@ -462,16 +455,41 @@ impl Editor {
     }
 
     fn step_up(&mut self) {
+        let cols = self.viewport_cols.max(1);
+        let visual_segment = self.cursor_col / cols;
+        let visual_col = self.cursor_col % cols;
+
+        if visual_segment > 0 {
+            self.cursor_col = (visual_segment - 1) * cols + visual_col;
+            self.clamp_col();
+            return;
+        }
+
         if self.cursor_row > 0 {
             self.cursor_row -= 1;
-            self.clamp_col();
+            let prev_len = self.line_len(self.cursor_row);
+            let prev_rows = wrapped_rows(prev_len, cols);
+            let prev_segment_start = (prev_rows.saturating_sub(1)) * cols;
+            self.cursor_col = (prev_segment_start + visual_col).min(prev_len);
         }
     }
 
     fn step_down(&mut self) {
+        let cols = self.viewport_cols.max(1);
+        let visual_segment = self.cursor_col / cols;
+        let visual_col = self.cursor_col % cols;
+        let line_len = self.line_len(self.cursor_row);
+        let visual_rows = wrapped_rows(line_len, cols);
+
+        if visual_segment + 1 < visual_rows {
+            self.cursor_col = ((visual_segment + 1) * cols + visual_col).min(line_len);
+            return;
+        }
+
         if self.cursor_row + 1 < self.lines.len() {
             self.cursor_row += 1;
-            self.clamp_col();
+            let next_len = self.line_len(self.cursor_row);
+            self.cursor_col = visual_col.min(next_len);
         }
     }
 
@@ -555,6 +573,13 @@ fn char_to_byte(text: &str, char_idx: usize) -> usize {
         .unwrap_or(text.len())
 }
 
+fn wrapped_rows(line_len: usize, cols: usize) -> usize {
+    if cols == 0 {
+        return 1;
+    }
+    line_len.max(1).div_ceil(cols)
+}
+
 #[cfg(test)]
 mod tests {
     use super::Editor;
@@ -601,5 +626,45 @@ mod tests {
 
         assert_eq!(editor.cursor_row(), 30);
         assert_eq!(editor.row_offset(), 0);
+    }
+
+    #[test]
+    fn down_moves_within_wrapped_line_before_next_file_line() {
+        let mut editor = Editor::scratch();
+        editor.insert_text("abcdefghij\nxy");
+        editor.set_viewport(10, 4);
+        editor.set_cursor(0, 1);
+
+        editor.move_down();
+        assert_eq!(editor.cursor_row(), 0);
+        assert_eq!(editor.cursor_col(), 5);
+
+        editor.move_down();
+        assert_eq!(editor.cursor_row(), 0);
+        assert_eq!(editor.cursor_col(), 9);
+
+        editor.move_down();
+        assert_eq!(editor.cursor_row(), 1);
+        assert_eq!(editor.cursor_col(), 1);
+    }
+
+    #[test]
+    fn up_moves_within_wrapped_line_before_previous_file_line() {
+        let mut editor = Editor::scratch();
+        editor.insert_text("abcd\nabcdefghij");
+        editor.set_viewport(10, 4);
+        editor.set_cursor(1, 9);
+
+        editor.move_up();
+        assert_eq!(editor.cursor_row(), 1);
+        assert_eq!(editor.cursor_col(), 5);
+
+        editor.move_up();
+        assert_eq!(editor.cursor_row(), 1);
+        assert_eq!(editor.cursor_col(), 1);
+
+        editor.move_up();
+        assert_eq!(editor.cursor_row(), 0);
+        assert_eq!(editor.cursor_col(), 1);
     }
 }

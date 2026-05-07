@@ -423,50 +423,73 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
     frame.render_widget(block, area);
 
     let line_number_width = app.editor_line_number_width();
-    let text_cols = inner.width.saturating_sub(line_number_width + 1) as usize;
+    let text_cols = inner.width.saturating_sub(line_number_width + 1).max(1) as usize;
     let text_rows = inner.height as usize;
     app.editor.set_viewport(text_rows, text_cols);
 
     let mut lines = Vec::with_capacity(text_rows);
     let row_offset = app.editor.row_offset();
-    let col_offset = app.editor.col_offset();
-
-    for screen_row in 0..text_rows {
-        let file_row = row_offset + screen_row;
-        let mut spans = Vec::new();
-        let full_width_selected = app
-            .editor
-            .selection_bounds()
-            .is_some_and(|(start, end)| file_row > start.row && file_row < end.row);
+    let mut file_row = row_offset;
+    while lines.len() < text_rows {
         if let Some(line) = app.editor.lines().get(file_row) {
-            let number = format!(
-                "{:>width$} ",
-                file_row + 1,
-                width = line_number_width.saturating_sub(1) as usize
-            );
-            spans.push(Span::styled(
-                number,
-                Style::default()
-                    .fg(CURRENT_THEME.editor_line_number_fg)
-                    .bg(CURRENT_THEME.editor_line_number_bg),
-            ));
+            let line_len = line.chars().count();
+            let wrapped = wrapped_rows(line_len, text_cols);
+            let full_width_selected = app
+                .editor
+                .selection_bounds()
+                .is_some_and(|(start, end)| file_row > start.row && file_row < end.row);
+            let selection = app.editor.selection_range_for_line(file_row);
 
-            spans.extend(render_editor_line(
-                line,
-                col_offset,
-                text_cols,
-                app.editor.selection_range_for_line(file_row),
-                full_width_selected,
-            ));
+            for segment in 0..wrapped {
+                if lines.len() >= text_rows {
+                    break;
+                }
+
+                let mut spans = Vec::new();
+                let number = if segment == 0 {
+                    format!(
+                        "{:>width$} ",
+                        file_row + 1,
+                        width = line_number_width.saturating_sub(1) as usize
+                    )
+                } else {
+                    " ".repeat(line_number_width as usize)
+                };
+                spans.push(Span::styled(
+                    number,
+                    Style::default()
+                        .fg(CURRENT_THEME.editor_line_number_fg)
+                        .bg(CURRENT_THEME.editor_line_number_bg),
+                ));
+
+                spans.extend(render_editor_segment(
+                    line,
+                    segment * text_cols,
+                    text_cols,
+                    selection,
+                    full_width_selected,
+                ));
+                lines.push(Line::from(spans));
+            }
+
+            file_row += 1;
         } else {
+            let mut spans = Vec::new();
             spans.push(Span::styled(
                 "~".repeat(line_number_width as usize),
                 Style::default()
                     .fg(CURRENT_THEME.panel_text_muted)
                     .bg(CURRENT_THEME.editor_text_bg),
             ));
+            spans.push(Span::styled(
+                " ".repeat(text_cols),
+                Style::default()
+                    .fg(CURRENT_THEME.editor_text_fg)
+                    .bg(CURRENT_THEME.editor_text_bg),
+            ));
+            lines.push(Line::from(spans));
+            file_row += 1;
         }
-        lines.push(Line::from(spans));
     }
 
     frame.render_widget(
@@ -479,11 +502,18 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
     );
 
     if app.focus == Focus::Editor {
-        let cursor_x = inner.x
-            + line_number_width
-            + app.editor.cursor_col().saturating_sub(app.editor.col_offset()) as u16;
-        let cursor_y = inner.y
-            + app.editor.cursor_row().saturating_sub(app.editor.row_offset()) as u16;
+        let cursor_segment = app.editor.cursor_col() / text_cols;
+        let cursor_x = inner.x + line_number_width + (app.editor.cursor_col() % text_cols) as u16;
+        let wrapped_before_cursor = app
+            .editor
+            .lines()
+            .iter()
+            .enumerate()
+            .skip(row_offset)
+            .take(app.editor.cursor_row().saturating_sub(row_offset))
+            .map(|(_, line)| wrapped_rows(line.chars().count(), text_cols))
+            .sum::<usize>();
+        let cursor_y = inner.y + wrapped_before_cursor as u16 + cursor_segment as u16;
         if cursor_x < inner.x + inner.width && cursor_y < inner.y + inner.height {
             frame.set_cursor_position((cursor_x, cursor_y));
         }
@@ -745,16 +775,16 @@ fn truncate(value: &str, width: u16) -> String {
     result
 }
 
-fn render_editor_line(
+fn render_editor_segment(
     line: &str,
-    col_offset: usize,
+    segment_start: usize,
     text_cols: usize,
     selection: Option<(usize, usize)>,
     full_width_selected: bool,
 ) -> Vec<Span<'static>> {
     let chars = line
         .chars()
-        .skip(col_offset)
+        .skip(segment_start)
         .take(text_cols)
         .collect::<Vec<_>>();
     let mut spans = Vec::new();
@@ -762,7 +792,7 @@ fn render_editor_line(
     let mut run_selected = None;
 
     for (screen_col, character) in chars.into_iter().enumerate() {
-        let absolute_col = col_offset + screen_col;
+        let absolute_col = segment_start + screen_col;
         let selected = selection
             .map(|(start, end)| absolute_col >= start && absolute_col < end)
             .unwrap_or(false);
@@ -783,7 +813,7 @@ fn render_editor_line(
     }
 
     if full_width_selected && text_cols > 0 {
-        let rendered_cols = line.chars().skip(col_offset).take(text_cols).count();
+        let rendered_cols = line.chars().skip(segment_start).take(text_cols).count();
         if rendered_cols < text_cols {
             let padding = " ".repeat(text_cols - rendered_cols);
             push_editor_run(&mut spans, &padding, true);
@@ -791,6 +821,13 @@ fn render_editor_line(
     }
 
     spans
+}
+
+fn wrapped_rows(line_len: usize, text_cols: usize) -> usize {
+    if text_cols == 0 {
+        return 1;
+    }
+    line_len.max(1).div_ceil(text_cols)
 }
 
 fn push_editor_run(spans: &mut Vec<Span<'static>>, run: &str, selected: bool) {

@@ -763,17 +763,35 @@ impl App {
         let inner = self.geometry.editor_inner;
         let line_number_width = self.editor_line_number_width();
         let text_x = inner.x.saturating_add(line_number_width);
-        let file_row = self
-            .editor
-            .row_offset()
-            .saturating_add(row.saturating_sub(inner.y) as usize);
-        let file_col = if column < text_x {
-            self.editor.col_offset()
+        let text_cols = inner.width.saturating_sub(line_number_width + 1).max(1) as usize;
+        let target_screen_row = row.saturating_sub(inner.y) as usize;
+        let mut remaining = target_screen_row;
+        let mut file_row = self.editor.row_offset();
+
+        while let Some(line) = self.editor.lines().get(file_row) {
+            let line_len = line.chars().count();
+            let wrapped = line_len.max(1).div_ceil(text_cols);
+            if remaining < wrapped {
+                break;
+            }
+            remaining -= wrapped;
+            file_row += 1;
+        }
+
+        if self.editor.lines().is_empty() {
+            file_row = 0;
         } else {
-            self.editor
-                .col_offset()
-                .saturating_add(column.saturating_sub(text_x) as usize)
-        };
+            file_row = file_row.min(self.editor.lines().len() - 1);
+        }
+
+        let segment = remaining;
+        let segment_col = column.saturating_sub(text_x) as usize;
+        let mut file_col = segment
+            .saturating_mul(text_cols)
+            .saturating_add(segment_col);
+        if let Some(line) = self.editor.lines().get(file_row) {
+            file_col = file_col.min(line.chars().count());
+        }
 
         if selecting {
             self.editor.select_to(file_row, file_col);
