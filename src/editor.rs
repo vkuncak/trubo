@@ -752,4 +752,32 @@ mod tests {
         assert_eq!(editor.row_offset(), 0);
         assert_eq!(editor.row_segment_offset(), 1);
     }
+
+    #[test]
+    fn extend_up_creates_selection_across_visual_rows() {
+        let mut editor = Editor::scratch();
+        editor.insert_text("abcd\nabcdefghij");
+        editor.set_viewport(10, 4);
+        editor.set_cursor(1, 9);
+
+        editor.extend_up();
+
+        assert_eq!(editor.cursor_row(), 1);
+        assert_eq!(editor.cursor_col(), 5);
+        assert_eq!(editor.selected_text().as_deref(), Some("fghi"));
+    }
+
+    #[test]
+    fn extend_down_creates_selection_across_visual_rows() {
+        let mut editor = Editor::scratch();
+        editor.insert_text("abcdefghij\nxy");
+        editor.set_viewport(10, 4);
+        editor.set_cursor(0, 1);
+
+        editor.extend_down();
+
+        assert_eq!(editor.cursor_row(), 0);
+        assert_eq!(editor.cursor_col(), 5);
+        assert_eq!(editor.selected_text().as_deref(), Some("bcde"));
+    }
 }

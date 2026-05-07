@@ -459,23 +459,23 @@ fn draw_browser_log(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let log_lines = Text::from(vec![
+    let log_lines = vec![
         Line::from(Span::styled(
-            truncate(&app.status, inner.width),
+            format!("Status: {}", app.status),
             Style::default()
                 .fg(CURRENT_THEME.panel_text_primary)
                 .bg(CURRENT_THEME.panel_background),
         )),
         Line::from(Span::styled(
-            truncate(&format!("Dir: {}", app.browser_label()), inner.width),
+            format!("Dir: {}", app.browser_label()),
             Style::default()
                 .fg(CURRENT_THEME.panel_text_secondary)
                 .bg(CURRENT_THEME.panel_background),
         )),
-    ]);
+    ];
 
     frame.render_widget(
-        Paragraph::new(log_lines).wrap(Wrap { trim: true }),
+        Paragraph::new(Text::from(log_lines)).wrap(Wrap { trim: false }),
         inner,
     );
 }
