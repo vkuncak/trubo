@@ -89,7 +89,7 @@ fn print_usage() {
     println!("Usage:");
     println!("  trust [FILE_OR_DIRECTORY]");
     println!();
-    println!("Keys: F1 Help, F2 Save, F3 Open, F4 Focus, F10 Menu, Ctrl+Q Quit");
+    println!("Keys: F1 Help, F2 Save, F3 Open, F4 Focus, F5 Run, F9 Build, Ctrl+Q Quit");
 }
 
 fn setup_terminal() -> io::Result<TerminalUi> {
@@ -169,6 +169,8 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
             KeyCode::Char('s') | KeyCode::Char('S') => app.save_current(),
             KeyCode::Char('f') | KeyCode::Char('F') => app.toggle_focus(),
             KeyCode::Char('o') | KeyCode::Char('O') => app.open_selected_file(),
+            KeyCode::Char('r') | KeyCode::Char('R') => app.run_cargo("run"),
+            KeyCode::Char('b') | KeyCode::Char('B') => app.run_cargo("build"),
             _ => {}
         }
         return Action::None;
@@ -182,6 +184,8 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
         KeyCode::F(2) => app.save_current(),
         KeyCode::F(3) => app.open_selected_file(),
         KeyCode::F(4) => app.toggle_focus(),
+        KeyCode::F(5) => app.run_cargo("run"),
+        KeyCode::F(9) => app.run_cargo("build"),
         KeyCode::F(10) => app.toggle_menu(),
         KeyCode::Tab => app.toggle_focus(),
         KeyCode::BackTab => app.toggle_focus(),

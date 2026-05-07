@@ -221,6 +221,11 @@ fn draw_desktop(frame: &mut Frame, area: Rect, app: &mut App) {
 }
 
 fn draw_browser(frame: &mut Frame, area: Rect, app: &mut App) {
+    let split = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(6), Constraint::Length(6)])
+        .split(area);
+
     let title = format!(" Files: {} ", app.browser_label());
     let block = retro_block(
         &title,
@@ -228,9 +233,9 @@ fn draw_browser(frame: &mut Frame, area: Rect, app: &mut App) {
         "Enter Open",
         Some("Backspace Up"),
     );
-    let inner = block.inner(area);
+    let inner = block.inner(split[0]);
     app.geometry.browser_inner = inner;
-    frame.render_widget(block, area);
+    frame.render_widget(block, split[0]);
 
     if app.entries.is_empty() {
         frame.render_widget(
@@ -279,6 +284,36 @@ fn draw_browser(frame: &mut Frame, area: Rect, app: &mut App) {
         .collect::<Vec<_>>();
 
     frame.render_widget(List::new(items).style(Style::default().bg(DOS_BLUE)), inner);
+
+    draw_browser_log(frame, split[1], app);
+}
+
+fn draw_browser_log(frame: &mut Frame, area: Rect, app: &App) {
+    let block = Block::default()
+        .title(" Log ")
+        .title_style(Style::default().fg(DOS_YELLOW).bg(DOS_BLUE))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(DOS_WHITE).bg(DOS_BLUE))
+        .style(Style::default().bg(DOS_BLUE));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let log_lines = Text::from(vec![
+        Line::from(Span::styled(
+            truncate(&app.status, inner.width),
+            Style::default().fg(DOS_WHITE).bg(DOS_BLUE),
+        )),
+        Line::from(Span::styled(
+            truncate(&format!("Dir: {}", app.browser_label()), inner.width),
+            Style::default().fg(DOS_CYAN).bg(DOS_BLUE),
+        )),
+    ]);
+
+    frame.render_widget(
+        Paragraph::new(log_lines).wrap(Wrap { trim: true }),
+        inner,
+    );
 }
 
 fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
@@ -359,7 +394,7 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
         app.editor.cursor_col() + 1
     );
     let selection = if app.editor.has_selection() { "  Sel" } else { "" };
-    let suffix = format!("  {position}{selection}  {} ", app.status);
+    let suffix = format!("  {position}{selection} ");
     let mut line = Line::from(vec![
         Span::styled(" ", base),
         Span::styled("F1", key),
@@ -370,6 +405,10 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled(" Open  ", base),
         Span::styled("F4", key),
         Span::styled(" Focus  ", base),
+        Span::styled("F5", key),
+        Span::styled(" Run  ", base),
+        Span::styled("F9", key),
+        Span::styled(" Build  ", base),
         Span::styled("F10", key),
         Span::styled(" Menu", base),
         Span::styled(suffix, base),
@@ -411,9 +450,11 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         )]),
         Line::from(""),
         Line::from("F2 Save     F3 Open selected file    F4 Cycle focus"),
+        Line::from("F5 cargo run                           F9 cargo build"),
         Line::from("Enter opens the highlighted file or directory."),
         Line::from("Backspace goes to the parent directory."),
-        Line::from("Ctrl+C Copy Ctrl+X Cut Ctrl+V Paste Ctrl+Q Quit"),
+        Line::from("Ctrl+R Run  Ctrl+B Build  Ctrl+Q Quit"),
+        Line::from("Ctrl+C Copy Ctrl+X Cut Ctrl+V Paste"),
         Line::from("Alt+X Delete line        Alt+U Duplicate line"),
         Line::from("Shift+Arrows/Home/End/Page selects text."),
         Line::from("Menu: F10 opens, arrows move, Enter activates."),

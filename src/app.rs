@@ -1,6 +1,7 @@
 use std::{
     fs, io,
     path::{Path, PathBuf},
+    process::Command,
 };
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -11,7 +12,7 @@ use crate::{
     project::{ProjectEntry, list_directory},
 };
 
-pub const MENUS: [Menu; 4] = [
+pub const MENUS: [Menu; 5] = [
     Menu {
         title: "File",
         items: &[
@@ -39,6 +40,13 @@ pub const MENUS: [Menu; 4] = [
             MenuItem::action("Editor pane", "", MenuAction::FocusEditor),
             MenuItem::separator(),
             MenuItem::action("Next pane", "F4", MenuAction::ToggleFocus),
+        ],
+    },
+    Menu {
+        title: "Run",
+        items: &[
+            MenuItem::action("Run", "F5", MenuAction::CargoRun),
+            MenuItem::action("Build", "F9", MenuAction::CargoBuild),
         ],
     },
     Menu {
@@ -95,6 +103,8 @@ pub enum MenuAction {
     Paste,
     DeleteLine,
     DuplicateLine,
+    CargoRun,
+    CargoBuild,
     ToggleFocus,
     FocusBrowser,
     FocusEditor,
@@ -278,6 +288,42 @@ impl App {
         }
     }
 
+    pub fn run_cargo(&mut self, command: &str) {
+        self.close_menu();
+        if self.editor.is_dirty() {
+            self.save_current();
+        }
+
+        let output = Command::new("cargo")
+            .arg(command)
+            .current_dir(&self.browser_dir)
+            .output();
+
+        match output {
+            Ok(output) => {
+                let code = output
+                    .status
+                    .code()
+                    .map(|code| code.to_string())
+                    .unwrap_or_else(|| "signal".to_string());
+
+                if output.status.success() {
+                    self.status = format!(
+                        "cargo {command} finished in {}",
+                        self.browser_dir.display()
+                    );
+                } else {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    let summary = stderr.lines().next().unwrap_or("command failed");
+                    self.status = format!("cargo {command} failed ({code}): {summary}");
+                }
+            }
+            Err(error) => {
+                self.status = format!("Could not run cargo {command}: {error}");
+            }
+        }
+    }
+
     pub fn handle_active_key(&mut self, key: KeyEvent) {
         if self.dialog.take().is_some() {
             return;
@@ -405,6 +451,8 @@ impl App {
             MenuAction::Paste => self.paste_from_clipboard(),
             MenuAction::DeleteLine => self.editor.delete_line(),
             MenuAction::DuplicateLine => self.editor.duplicate_line(),
+            MenuAction::CargoRun => self.run_cargo("run"),
+            MenuAction::CargoBuild => self.run_cargo("build"),
             MenuAction::ToggleFocus => self.toggle_focus(),
             MenuAction::FocusBrowser => self.set_focus(Focus::Browser),
             MenuAction::FocusEditor => self.set_focus(Focus::Editor),
