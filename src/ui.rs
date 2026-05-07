@@ -476,7 +476,7 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
         } else {
             let mut spans = Vec::new();
             spans.push(Span::styled(
-                "~".repeat(line_number_width as usize),
+                " ".repeat(line_number_width as usize),
                 Style::default()
                     .fg(CURRENT_THEME.panel_text_muted)
                     .bg(CURRENT_THEME.editor_text_bg),
