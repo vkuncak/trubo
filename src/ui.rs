@@ -46,7 +46,7 @@ const CURRENT_THEME: Theme = Theme {
     panel_background: Color::Rgb(255, 255, 255),
     panel_border_inactive: Color::Rgb(250, 250, 250),
     panel_border_active: Color::Rgb(55, 155, 0),
-    panel_text_primary: Color::Rgb(200, 200, 200),
+    panel_text_primary: Color::Rgb(0, 0, 0),
     panel_text_secondary: Color::Rgb(0, 20, 20),
     panel_text_muted: Color::Rgb(85, 85, 85),
     panel_title_text: Color::Rgb(0, 0, 80),
@@ -61,14 +61,14 @@ const CURRENT_THEME: Theme = Theme {
     status_bar_bg: Color::Rgb(200, 200, 200),
     status_bar_fg: Color::Rgb(0, 0, 0),
     status_hotkey_fg: Color::Rgb(170, 0, 0),
-    selected_bg: Color::Rgb(0, 170, 170),
+    selected_bg: Color::Rgb(180, 240, 240),
     selected_fg: Color::Rgb(0, 0, 0),
     editor_text_fg: Color::Rgb(0, 0, 0),
     editor_text_bg: Color::Rgb(255, 255, 255),
     editor_identifier_fg: Color::Rgb(0, 5, 0),
     editor_line_number_fg: Color::Rgb(0, 60, 0),
     editor_line_number_bg: Color::Rgb(200, 200, 200),
-    editor_selection_bg: Color::Rgb(0, 210, 230),
+    editor_selection_bg: Color::Rgb(180, 240, 240),
     editor_selection_fg: Color::Rgb(0, 0, 0),
 };
 
@@ -957,8 +957,8 @@ fn push_editor_run(spans: &mut Vec<Span<'static>>, run: &str, style: RunStyle) {
     let style = match style {
         RunStyle::Selected => Style::default()
             .fg(CURRENT_THEME.editor_selection_fg)
-            .bg(CURRENT_THEME.editor_selection_bg)
-            .add_modifier(Modifier::BOLD),
+            .bg(CURRENT_THEME.editor_selection_bg),
+            // .add_modifier(Modifier::BOLD),
         RunStyle::Identifier => Style::default()
             .fg(CURRENT_THEME.editor_identifier_fg)
             .bg(CURRENT_THEME.editor_text_bg),
