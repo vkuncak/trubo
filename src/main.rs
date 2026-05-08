@@ -183,7 +183,9 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
             KeyCode::Char('v') | KeyCode::Char('V') => app.paste_from_clipboard(),
             KeyCode::Char('z') | KeyCode::Char('Z') => app.undo_last_edit(),
             KeyCode::Insert => app.copy_selection(),
-            KeyCode::Char('s') | KeyCode::Char('S') => app.save_current(),
+            KeyCode::Char('s') | KeyCode::Char('S') => {
+                app.save_current();
+            }
             KeyCode::Char('f') | KeyCode::Char('F') => app.toggle_focus(),
             KeyCode::Char('o') | KeyCode::Char('O') => app.open_selected_file(),
             KeyCode::Char('r') | KeyCode::Char('R') => app.run_current_target(),
@@ -197,7 +199,9 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
         KeyCode::Insert if key.modifiers.contains(KeyModifiers::SHIFT) => app.paste_from_clipboard(),
         KeyCode::Delete if key.modifiers.contains(KeyModifiers::SHIFT) => app.cut_selection(),
         KeyCode::F(1) => app.help_open = true,
-        KeyCode::F(2) => app.save_current(),
+        KeyCode::F(2) => {
+            app.save_current();
+        }
         KeyCode::F(3) => app.open_selected_file(),
         KeyCode::F(4) => app.toggle_focus(),
         KeyCode::F(5) => app.run_current_target(),

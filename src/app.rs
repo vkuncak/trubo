@@ -137,7 +137,7 @@ pub enum Focus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dialog {
     About,
-    ConfirmExit { dirty: bool, selection: bool },
+    SaveFile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -359,13 +359,17 @@ impl App {
         self.status = format!("Browsing {}", self.browser_label());
     }
 
-    pub fn save_current(&mut self) {
+    pub fn save_current(&mut self) -> bool {
         self.close_menu();
         match self.editor.save() {
             Ok(()) => {
                 self.status = format!("Saved {}", self.current_file_label());
+                true
             }
-            Err(error) => self.status = format!("Save failed: {error}"),
+            Err(error) => {
+                self.status = format!("Save failed: {error}");
+                false
+            }
         }
     }
 
@@ -485,9 +489,16 @@ impl App {
                 self.dialog = None;
                 Action::None
             }
-            Dialog::ConfirmExit { .. } => match _key.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => Action::Quit,
-                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+            Dialog::SaveFile => match _key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    if self.save_current() {
+                        Action::Quit
+                    } else {
+                        Action::None
+                    }
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') => Action::Quit,
+                KeyCode::Esc => {
                     self.dialog = None;
                     self.status = "Exit cancelled".to_string();
                     Action::None
@@ -501,12 +512,9 @@ impl App {
         self.close_menu();
         self.help_open = false;
 
-        let dirty = self.editor.is_dirty();
-        let selection = self.editor.has_selection();
-
-        if dirty || selection {
-            self.dialog = Some(Dialog::ConfirmExit { dirty, selection });
-            self.status = "Confirm exit: unsaved edits or active selection".to_string();
+        if self.editor.is_dirty() {
+            self.dialog = Some(Dialog::SaveFile);
+            self.status = format!("Save file before exit: {}", self.current_file_label());
             return Action::None;
         }
 
@@ -613,7 +621,9 @@ impl App {
         match action {
             MenuAction::None => {}
             MenuAction::Open => self.open_selected_file(),
-            MenuAction::Save => self.save_current(),
+            MenuAction::Save => {
+                self.save_current();
+            }
             MenuAction::Quit => return self.request_quit(),
             MenuAction::Copy => self.copy_selection(),
             MenuAction::Cut => self.cut_selection(),

@@ -167,7 +167,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.help_open {
         draw_help(frame, centered(root, 84, 28));
     } else if let Some(dialog) = app.dialog {
-        draw_dialog(frame, dialog, centered(root, 60, 10));
+        draw_dialog(frame, app, dialog, centered(root, 72, 12));
     }
 }
 
@@ -818,11 +818,11 @@ fn help_section_line(title: &str) -> Line<'static> {
     )])
 }
 
-fn draw_dialog(frame: &mut Frame, dialog: Dialog, area: Rect) {
+fn draw_dialog(frame: &mut Frame, app: &App, dialog: Dialog, area: Rect) {
     frame.render_widget(Clear, area);
     let title = match dialog {
         Dialog::About => " About trubo ",
-        Dialog::ConfirmExit { .. } => " Confirm Exit ",
+        Dialog::SaveFile => " Save File ",
     };
     let block = Block::default()
         .title(title)
@@ -854,25 +854,28 @@ fn draw_dialog(frame: &mut Frame, dialog: Dialog, area: Rect) {
             Line::from(""),
             Line::from("Press any key to return."),
         ]),
-        Dialog::ConfirmExit { dirty, selection } => {
-            let reason = match (dirty, selection) {
-                (true, true) => "Unsaved changes and a selection are active.",
-                (true, false) => "Unsaved changes are present.",
-                (false, true) => "A text selection is active.",
-                (false, false) => "",
-            };
-
+        Dialog::SaveFile => {
+            let path = app.current_file_label();
+            let file_name = app
+                .editor
+                .path()
+                .and_then(|path| path.file_name())
+                .and_then(|name| name.to_str())
+                .unwrap_or("Untitled")
+                .to_string();
             Text::from(vec![
                 Line::from(""),
                 Line::from(vec![Span::styled(
-                    "Exit trubo now?",
+                    "Save File",
                     Style::default().add_modifier(Modifier::BOLD),
                 )]),
                 Line::from(""),
-                Line::from(reason),
+                Line::from(path),
+                Line::from(file_name),
                 Line::from(""),
-                Line::from("Y / Enter = Exit"),
-                Line::from("N / Esc = Stay in editor"),
+                Line::from("Y = Save and exit"),
+                Line::from("N = Exit without saving"),
+                Line::from("Esc = Stay in application"),
             ])
         }
     };

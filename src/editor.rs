@@ -130,10 +130,6 @@ impl Editor {
         self.dirty
     }
 
-    pub fn has_selection(&self) -> bool {
-        self.selection_bounds().is_some()
-    }
-
     pub fn set_cursor(&mut self, row: usize, col: usize) {
         let position = self.clamp_position(Position { row, col });
         self.set_cursor_position(position);
