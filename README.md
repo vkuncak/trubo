@@ -1,6 +1,6 @@
 # trubo
 
-Textual Rust Unicode-Based Operator
+Text (Rust, Unicode, Basic) Operator
 
 trubo is a retro TUI text editor written in Rust.
 

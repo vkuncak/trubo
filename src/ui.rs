@@ -9,7 +9,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
 
 struct Theme {
@@ -29,6 +29,9 @@ struct Theme {
     menu_active_bg: Color,
     menu_active_fg: Color,
     menu_active_hotkey_fg: Color,
+    menu_selected_bg: Color,
+    menu_selected_fg: Color,
+    menu_selected_hotkey_fg: Color,
     dialog_background: Color,
     status_bar_bg: Color,
     status_bar_fg: Color,
@@ -61,12 +64,15 @@ const CURRENT_THEME: Theme = Theme {
     menu_active_bg: Color::Rgb(0, 170, 170),
     menu_active_fg: Color::Rgb(0, 0, 0),
     menu_active_hotkey_fg: Color::Rgb(170, 0, 0),
+    menu_selected_bg: Color::Rgb(100, 255, 255),
+    menu_selected_fg: Color::Rgb(0, 0, 0),
+    menu_selected_hotkey_fg: Color::Rgb(170, 0, 0),
     dialog_background: Color::Rgb(210, 230, 255),
     status_bar_bg: Color::Rgb(200, 200, 200),
     status_bar_fg: Color::Rgb(0, 0, 0),
     status_hotkey_fg: Color::Rgb(170, 0, 0),
     browser_selected_active_bg: Color::Rgb(255, 195, 20),
-    browser_selected_inactive_bg: Color::Rgb(180, 240, 240),
+    browser_selected_inactive_bg: Color::Rgb(210, 230, 255),
     selected_fg: Color::Rgb(0, 0, 0),
     editor_text_fg: Color::Rgb(0, 0, 0),
     editor_text_bg: Color::Rgb(255, 255, 255),
@@ -299,9 +305,8 @@ fn draw_menu_dropdown(frame: &mut Frame, app: &mut App) {
             }
         })
         .max()
-        .unwrap_or(14)
-        .max(menu.title.len() + 4) as u16;
-    let height = menu.items.len() as u16 + 2;
+        .unwrap_or(14) as u16;
+    let height = menu.items.len() as u16;
     let max_x = app.geometry.root.x + app.geometry.root.width.saturating_sub(width);
     let area = Rect {
         x: bar.x.min(max_x),
@@ -312,21 +317,15 @@ fn draw_menu_dropdown(frame: &mut Frame, app: &mut App) {
     app.geometry.menu.dropdown = Some(area);
 
     frame.render_widget(Clear, area);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Double)
-        .border_style(
-            Style::default()
-                .fg(CURRENT_THEME.panel_border_active)
-                .bg(CURRENT_THEME.dialog_background),
-        )
-        .style(
+    let inner = area;
+    frame.render_widget(
+        Block::default().style(
             Style::default()
                 .fg(CURRENT_THEME.menu_bar_fg)
                 .bg(CURRENT_THEME.dialog_background),
-        );
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+        ),
+        area,
+    );
 
     let lines = menu
         .items
@@ -344,8 +343,8 @@ fn draw_menu_dropdown(frame: &mut Frame, app: &mut App) {
                 let active = index == app.active_menu_item;
                 let style = if active {
                     Style::default()
-                        .fg(CURRENT_THEME.editor_text_fg)
-                        .bg(CURRENT_THEME.editor_text_bg)
+                        .fg(CURRENT_THEME.menu_selected_fg)
+                        .bg(CURRENT_THEME.menu_selected_bg)
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
@@ -354,8 +353,8 @@ fn draw_menu_dropdown(frame: &mut Frame, app: &mut App) {
                 };
                 let hot_style = if active {
                     Style::default()
-                        .fg(CURRENT_THEME.status_hotkey_fg)
-                        .bg(CURRENT_THEME.editor_text_bg)
+                        .fg(CURRENT_THEME.menu_selected_hotkey_fg)
+                        .bg(CURRENT_THEME.menu_selected_bg)
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
@@ -730,22 +729,18 @@ fn clamp_browser_width(total_width: u16, current: u16) -> u16 {
 
 fn draw_help(frame: &mut Frame, area: Rect) {
     frame.render_widget(Clear, area);
-    let block = Block::default()
-        .title(" Help ")
-        .borders(Borders::ALL)
-        .border_type(BorderType::Double)
-        .border_style(
-            Style::default()
-                .fg(CURRENT_THEME.panel_border_active)
-                .bg(CURRENT_THEME.menu_active_bg),
-        )
-        .style(
+    let inner = area.inner(Margin {
+        vertical: 0,
+        horizontal: 1,
+    });
+    frame.render_widget(
+        Block::default().style(
             Style::default()
                 .fg(CURRENT_THEME.menu_bar_fg)
-                .bg(CURRENT_THEME.menu_bar_bg),
-        );
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+                .bg(CURRENT_THEME.dialog_background),
+        ),
+        area,
+    );
 
     let text = Text::from(vec![
         Line::from(vec![Span::styled(
@@ -832,24 +827,25 @@ fn draw_dialog(frame: &mut Frame, app: &App, dialog: Dialog, area: Rect) {
 }
 
 fn draw_about_dialog(frame: &mut Frame, area: Rect) {
-    let block = Block::default()
-        .title(" About trubo ")
-        .borders(Borders::ALL)
-        .border_type(BorderType::Double)
-        .border_style(
-            Style::default()
-                .fg(CURRENT_THEME.panel_border_active)
-                .bg(CURRENT_THEME.dialog_background),
-        )
-        .style(
+    let inner = area.inner(Margin {
+        vertical: 0,
+        horizontal: 1,
+    });
+    frame.render_widget(
+        Block::default().style(
             Style::default()
                 .fg(CURRENT_THEME.menu_bar_fg)
                 .bg(CURRENT_THEME.dialog_background),
-        );
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+        ),
+        area,
+    );
 
     let text = Text::from(vec![
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "About trubo",
+            Style::default().add_modifier(Modifier::BOLD),
+        )]),
         Line::from(""),
         Line::from(vec![Span::styled(
             "trubo 0.1",
