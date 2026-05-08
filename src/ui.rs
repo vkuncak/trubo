@@ -16,7 +16,6 @@ struct Theme {
     panel_border_inactive: Color,
     panel_border_active: Color,
     panel_text_primary: Color,
-    panel_text_secondary: Color,
     panel_text_muted: Color,
     panel_title_text: Color,
     browser_header_bg: Color,
@@ -45,11 +44,10 @@ struct Theme {
 
 const CURRENT_THEME: Theme = Theme {
     app_background: Color::Rgb(200, 200, 200),
-    panel_background: Color::Rgb(255, 255, 255),
+    panel_background: Color::Rgb(225, 255, 225),
     panel_border_inactive: Color::Rgb(250, 250, 250),
     panel_border_active: Color::Rgb(55, 155, 0),
     panel_text_primary: Color::Rgb(0, 0, 0),
-    panel_text_secondary: Color::Rgb(0, 20, 20),
     panel_text_muted: Color::Rgb(85, 85, 85),
     panel_title_text: Color::Rgb(0, 0, 80),
     browser_header_bg: Color::Rgb(210, 230, 255),
@@ -64,7 +62,7 @@ const CURRENT_THEME: Theme = Theme {
     status_bar_bg: Color::Rgb(200, 200, 200),
     status_bar_fg: Color::Rgb(0, 0, 0),
     status_hotkey_fg: Color::Rgb(170, 0, 0),
-    browser_selected_active_bg: Color::Rgb(255, 165, 0),
+    browser_selected_active_bg: Color::Rgb(255, 195, 20),
     browser_selected_inactive_bg: Color::Rgb(180, 240, 240),
     selected_fg: Color::Rgb(0, 0, 0),
     editor_text_fg: Color::Rgb(0, 0, 0),
@@ -379,9 +377,11 @@ fn draw_browser(frame: &mut Frame, area: Rect, app: &mut App) {
         .constraints([Constraint::Min(6), Constraint::Length(6)])
         .split(area);
 
-    let block = retro_block("", app.focus == Focus::Browser, None, None);
-    let inner = block.inner(split[0]);
-    frame.render_widget(block, split[0]);
+    frame.render_widget(
+        Block::default().style(Style::default().bg(CURRENT_THEME.panel_background)),
+        split[0],
+    );
+    let inner = split[0];
 
     let header_lines = wrap_path_lines(&app.browser_label(), inner.width);
     let header_height = (header_lines.len() as u16).min(inner.height);
@@ -487,10 +487,16 @@ fn draw_browser_log(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(
         Paragraph::new(" Log ").style(
             Style::default()
-                .fg(CURRENT_THEME.panel_title_text)
-                .bg(CURRENT_THEME.panel_background),
+                .fg(CURRENT_THEME.status_bar_fg)
+                .bg(CURRENT_THEME.status_bar_bg)
+                .add_modifier(Modifier::BOLD),
         ),
         sections[0],
+    );
+
+    frame.render_widget(
+        Block::default().style(Style::default().bg(CURRENT_THEME.panel_background)),
+        sections[1],
     );
 
     let log_lines = vec![
@@ -500,16 +506,12 @@ fn draw_browser_log(frame: &mut Frame, area: Rect, app: &App) {
                 .fg(CURRENT_THEME.panel_text_primary)
                 .bg(CURRENT_THEME.panel_background),
         )),
-        Line::from(Span::styled(
-            format!("Dir: {}", app.browser_label()),
-            Style::default()
-                .fg(CURRENT_THEME.panel_text_secondary)
-                .bg(CURRENT_THEME.panel_background),
-        )),
     ];
 
     frame.render_widget(
-        Paragraph::new(Text::from(log_lines)).wrap(Wrap { trim: false }),
+        Paragraph::new(Text::from(log_lines))
+            .style(Style::default().bg(CURRENT_THEME.panel_background))
+            .wrap(Wrap { trim: false }),
         sections[1],
     );
 }
@@ -808,58 +810,6 @@ fn draw_dialog(frame: &mut Frame, dialog: Dialog, area: Rect) {
             .wrap(Wrap { trim: true }),
         inner,
     );
-}
-
-fn retro_block<'a>(
-    title: &'a str,
-    active: bool,
-    left: Option<&'a str>,
-    right: Option<&'a str>,
-) -> Block<'a> {
-    let border = if active {
-        Style::default()
-            .fg(CURRENT_THEME.panel_border_active)
-            .bg(CURRENT_THEME.panel_background)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
-            .fg(CURRENT_THEME.panel_border_inactive)
-            .bg(CURRENT_THEME.panel_background)
-    };
-
-    let mut block = Block::default()
-        .title(title)
-        .title_style(
-            Style::default()
-                .fg(CURRENT_THEME.panel_title_text)
-                .bg(CURRENT_THEME.panel_background),
-        )
-        .borders(Borders::TOP)
-        .border_style(border)
-        .style(Style::default().bg(CURRENT_THEME.panel_background));
-
-    if let Some(left) = left {
-        block = block.title_bottom(Line::from(Span::styled(
-            left,
-            Style::default()
-                .fg(CURRENT_THEME.panel_title_text)
-                .bg(CURRENT_THEME.panel_background),
-        )));
-    }
-
-    if let Some(right) = right {
-        block = block.title_bottom(
-            Line::from(Span::styled(
-                right,
-                Style::default()
-                    .fg(CURRENT_THEME.panel_text_secondary)
-                    .bg(CURRENT_THEME.panel_background),
-            ))
-            .right_aligned(),
-        );
-    }
-
-    block
 }
 
 fn centered(area: Rect, width: u16, height: u16) -> Rect {
