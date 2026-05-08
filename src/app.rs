@@ -5,6 +5,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(all(unix, not(target_os = "macos")))]
+use std::process::Stdio;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 
@@ -375,38 +378,84 @@ impl App {
         };
     }
 
-    pub fn run_cargo(&mut self, command: &str) {
+    pub fn run_current_target(&mut self) {
         self.close_menu();
         if self.editor.is_dirty() {
             self.save_current();
         }
 
-        let output = Command::new("cargo")
-            .arg(command)
-            .current_dir(&self.browser_dir)
-            .output();
+        let Some(path) = self.editor.path() else {
+            self.status = "Run needs a saved file".to_string();
+            return;
+        };
 
-        match output {
-            Ok(output) => {
-                let code = output
-                    .status
-                    .code()
-                    .map(|code| code.to_string())
-                    .unwrap_or_else(|| "signal".to_string());
+        let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or_default();
+        let cwd = path.parent().unwrap_or(self.browser_dir.as_path());
 
-                if output.status.success() {
-                    self.status = format!(
-                        "cargo {command} finished in {}",
-                        self.browser_dir.display()
-                    );
-                } else {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    let summary = stderr.lines().next().unwrap_or("command failed");
-                    self.status = format!("cargo {command} failed ({code}): {summary}");
-                }
+        let (command, description) = match extension {
+            "rs" => ("cargo run".to_string(), "cargo run".to_string()),
+            "scala" => (
+                format!("scala {}", shell_quote(path)),
+                format!("scala {}", path.display()),
+            ),
+            "lean" => (
+                format!("lean {}", shell_quote(path)),
+                format!("lean {}", path.display()),
+            ),
+            _ => {
+                self.status = format!("Run is not configured for .{extension}");
+                return;
+            }
+        };
+
+        match launch_in_interactive_terminal(cwd, &command) {
+            Ok(()) => {
+                self.request_full_redraw();
+                self.status = format!("Launched {description} in external terminal");
             }
             Err(error) => {
-                self.status = format!("Could not run cargo {command}: {error}");
+                self.status = format!("Run launch failed: {error}");
+            }
+        }
+    }
+
+    pub fn build_current_target(&mut self) {
+        self.close_menu();
+        if self.editor.is_dirty() {
+            self.save_current();
+        }
+
+        let Some(path) = self.editor.path() else {
+            self.status = "Build needs a saved file".to_string();
+            return;
+        };
+
+        let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or_default();
+        let cwd = path.parent().unwrap_or(self.browser_dir.as_path());
+
+        let (command, description) = match extension {
+            "rs" => ("cargo build".to_string(), "cargo build".to_string()),
+            "scala" => (
+                format!("scalac {}", shell_quote(path)),
+                format!("scalac {}", path.display()),
+            ),
+            "lean" => (
+                format!("lean {}", shell_quote(path)),
+                format!("lean {}", path.display()),
+            ),
+            _ => {
+                self.status = format!("Build is not configured for .{extension}");
+                return;
+            }
+        };
+
+        match launch_in_interactive_terminal(cwd, &command) {
+            Ok(()) => {
+                self.request_full_redraw();
+                self.status = format!("Launched {description} in external terminal");
+            }
+            Err(error) => {
+                self.status = format!("Build launch failed: {error}");
             }
         }
     }
@@ -571,8 +620,8 @@ impl App {
             MenuAction::Paste => self.paste_from_clipboard(),
             MenuAction::DeleteLine => self.editor.delete_line(),
             MenuAction::DuplicateLine => self.editor.duplicate_line(),
-            MenuAction::CargoRun => self.run_cargo("run"),
-            MenuAction::CargoBuild => self.run_cargo("build"),
+            MenuAction::CargoRun => self.run_current_target(),
+            MenuAction::CargoBuild => self.build_current_target(),
             MenuAction::ToggleFocus => self.toggle_focus(),
             MenuAction::FocusBrowser => self.set_focus(Focus::Browser),
             MenuAction::FocusEditor => self.set_focus(Focus::Editor),
@@ -962,6 +1011,85 @@ fn first_selectable_item(menu_index: usize) -> usize {
         .iter()
         .position(|item| !item.separator)
         .unwrap_or(0)
+}
+
+fn shell_quote(path: &Path) -> String {
+    let value = path.to_string_lossy();
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[cfg(target_os = "macos")]
+fn launch_in_interactive_terminal(cwd: &Path, command: &str) -> io::Result<()> {
+    let full_command = format!("cd {} && {}", shell_quote(cwd), command);
+    let status = Command::new("osascript")
+        .arg("-e")
+        .arg("on run argv")
+        .arg("-e")
+        .arg("set commandText to item 1 of argv")
+        .arg("-e")
+        .arg("tell application \"Terminal\"")
+        .arg("-e")
+        .arg("activate")
+        .arg("-e")
+        .arg("do script commandText")
+        .arg("-e")
+        .arg("end tell")
+        .arg("-e")
+        .arg("end run")
+        .arg(full_command)
+        .status()?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "osascript exited with status {status}"
+        )))
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn launch_in_interactive_terminal(cwd: &Path, command: &str) -> io::Result<()> {
+    let status = Command::new("cmd")
+        .args(["/C", "start", "cmd", "/K", command])
+        .current_dir(cwd)
+        .status()?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "cmd exited with status {status}"
+        )))
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn launch_in_interactive_terminal(cwd: &Path, command: &str) -> io::Result<()> {
+    let full_command = format!("cd {} && {}", shell_quote(cwd), command);
+    let launchers: [(&str, &[&str]); 3] = [
+        ("x-terminal-emulator", &["-e", "sh", "-lc"]),
+        ("gnome-terminal", &["--", "sh", "-lc"]),
+        ("xterm", &["-e", "sh", "-lc"]),
+    ];
+
+    let mut last_error = io::Error::other("no terminal launcher configured");
+    for (program, args) in launchers {
+        match Command::new(program)
+            .args(args)
+            .arg(&full_command)
+            .current_dir(cwd)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(_) => return Ok(()),
+            Err(error) => last_error = error,
+        }
+    }
+
+    Err(last_error)
 }
 
 fn menu_index_for_hotkey(character: char) -> Option<usize> {
