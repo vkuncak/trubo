@@ -121,6 +121,9 @@ fn restore_terminal(terminal: &mut TerminalUi) -> io::Result<()> {
 fn run(terminal: &mut TerminalUi, app: &mut App) -> io::Result<()> {
     loop {
         app.tick_browser_preview();
+        if app.take_full_redraw_request() {
+            terminal.clear()?;
+        }
         terminal.draw(|frame| ui::draw(frame, app))?;
 
         if event::poll(Duration::from_millis(120))? {
@@ -174,6 +177,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
         match key.code {
             KeyCode::Left => app.focus_browser(),
             KeyCode::Right => app.focus_editor(),
+            KeyCode::Char('l') | KeyCode::Char('L') => app.request_full_redraw(),
             KeyCode::Char('c') | KeyCode::Char('C') => app.copy_selection(),
             KeyCode::Char('x') | KeyCode::Char('X') => app.cut_selection(),
             KeyCode::Char('v') | KeyCode::Char('V') => app.paste_from_clipboard(),

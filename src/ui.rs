@@ -169,7 +169,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     if app.help_open {
-        draw_help(frame, centered(root, 78, 22));
+        draw_help(frame, centered(root, 84, 28));
     } else if let Some(dialog) = app.dialog {
         draw_dialog(frame, dialog, centered(root, 60, 10));
     }
@@ -757,7 +757,8 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         help_bindings_line(&[("Ctrl+Left", "Files pane"), ("Ctrl+Right", "Editor pane"), ("F10", "Menu")]),
         help_bindings_line(&[("F5", "cargo run"), ("F9", "cargo build"), ("Ctrl+Q", "Quit")]),
         help_bindings_line(&[("Ctrl+S", "Save"), ("Ctrl+O", "Open selected file"), ("Ctrl+F", "Cycle pane")]),
-        help_bindings_line(&[("Ctrl+R", "Run"), ("Ctrl+B", "Build"), ("Ctrl+Space", "Toggle select mode")]),
+        help_bindings_line(&[("Ctrl+L", "Redraw screen"), ("Ctrl+R", "Run"), ("Ctrl+B", "Build")]),
+        help_bindings_line(&[("Ctrl+Space", "Toggle select mode")]),
         help_bindings_line(&[("Ctrl+C", "Copy"), ("Ctrl+X", "Cut"), ("Ctrl+V", "Paste"), ("Ctrl+Z", "Undo")]),
         help_bindings_line(&[("Ctrl+Ins", "Copy"), ("Shift+Ins", "Paste"), ("Shift+Del", "Cut")]),
         help_bindings_line(&[("Alt+X", "Delete line"), ("Alt+U", "Duplicate line")]),

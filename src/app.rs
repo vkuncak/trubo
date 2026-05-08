@@ -175,6 +175,7 @@ pub struct App {
     pub status: String,
     pub browser_pane_width: u16,
     pub geometry: Geometry,
+    full_redraw_requested: bool,
     browser_preview_due_at: Option<Instant>,
     drag_target: Option<DragTarget>,
 }
@@ -205,6 +206,7 @@ impl App {
             status: "Ready".to_string(),
             browser_pane_width: 30,
             geometry: Geometry::default(),
+            full_redraw_requested: false,
             browser_preview_due_at: None,
             drag_target: None,
         }
@@ -220,10 +222,11 @@ impl App {
 
     pub fn toggle_focus(&mut self) {
         self.close_menu();
-        self.focus = match self.focus {
+        let focus = match self.focus {
             Focus::Browser => Focus::Editor,
             Focus::Editor => Focus::Browser,
         };
+        self.assign_focus(focus);
         if self.focus == Focus::Browser {
             self.schedule_browser_preview();
         }
@@ -240,11 +243,23 @@ impl App {
 
     fn set_focus(&mut self, focus: Focus) {
         self.close_menu();
-        self.focus = focus;
+        self.assign_focus(focus);
         if self.focus == Focus::Browser {
             self.schedule_browser_preview();
         }
         self.status = format!("Focus: {}", self.focus_name());
+    }
+
+    fn assign_focus(&mut self, focus: Focus) {
+        self.focus = focus;
+    }
+
+    pub fn request_full_redraw(&mut self) {
+        self.full_redraw_requested = true;
+    }
+
+    pub fn take_full_redraw_request(&mut self) -> bool {
+        std::mem::take(&mut self.full_redraw_requested)
     }
 
     pub fn tick_browser_preview(&mut self) {
@@ -325,7 +340,7 @@ impl App {
         match Editor::open(&path) {
             Ok(editor) => {
                 self.editor = editor;
-                self.focus = Focus::Editor;
+                self.assign_focus(Focus::Editor);
                 self.status = format!("Opened {}", path.display());
             }
             Err(error) => self.status = format!("Open failed: {error}"),
@@ -337,7 +352,7 @@ impl App {
         self.browser_dir = path;
         self.selected_entry = 0;
         self.refresh_browser();
-        self.focus = Focus::Browser;
+        self.assign_focus(Focus::Browser);
         self.status = format!("Browsing {}", self.browser_label());
     }
 
@@ -610,7 +625,7 @@ impl App {
 
         self.dialog = None;
         self.help_open = false;
-        self.focus = Focus::Editor;
+        self.assign_focus(Focus::Editor);
         self.editor.insert_text(text);
         self.status = format!("Pasted {} characters", text.chars().count());
     }
@@ -618,7 +633,7 @@ impl App {
     pub fn undo_last_edit(&mut self) {
         self.dialog = None;
         self.help_open = false;
-        self.focus = Focus::Editor;
+        self.assign_focus(Focus::Editor);
 
         if self.editor.undo() {
             self.status = "Undo applied".to_string();
@@ -690,17 +705,17 @@ impl App {
         }
 
         if contains(self.geometry.browser_inner, column, row) {
-            self.focus = Focus::Browser;
+            self.assign_focus(Focus::Browser);
             self.select_entry_at(row);
         } else if contains(self.geometry.editor_inner, column, row) {
-            self.focus = Focus::Editor;
+            self.assign_focus(Focus::Editor);
             self.place_cursor_at(column, row, false);
             self.drag_target = Some(DragTarget::EditorSelection);
         } else if contains(self.geometry.browser_area, column, row) {
-            self.focus = Focus::Browser;
+            self.assign_focus(Focus::Browser);
             self.status = "Focus: Files".to_string();
         } else if contains(self.geometry.editor_area, column, row) {
-            self.focus = Focus::Editor;
+            self.assign_focus(Focus::Editor);
             self.status = "Focus: Edit".to_string();
         }
 
@@ -721,7 +736,7 @@ impl App {
         }
 
         if contains(self.geometry.browser_inner, column, row) {
-            self.focus = Focus::Browser;
+            self.assign_focus(Focus::Browser);
             if amount < 0 {
                 for _ in 0..amount.unsigned_abs() {
                     self.select_previous_entry();
@@ -732,7 +747,7 @@ impl App {
                 }
             }
         } else if contains(self.geometry.editor_inner, column, row) {
-            self.focus = Focus::Editor;
+            self.assign_focus(Focus::Editor);
             if amount < 0 {
                 self.editor.page_up(amount.unsigned_abs());
             } else {
