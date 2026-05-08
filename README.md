@@ -1,5 +1,7 @@
 # trubo
 
+Textual Rust Unicode-Based Operator
+
 trubo is a retro TUI text editor written in Rust.
 
 Status: experimental nostalgia project. It edits text files, browses

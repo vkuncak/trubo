@@ -109,6 +109,34 @@ const SCALA3_ALL_KEYWORDS: &[&str] = &[
     "*", "+", "-",
 ];
 
+const LEAN_KEYWORDS: &[&str] = &[
+    "import", "prelude",
+    "open", "as", "renaming", "replacing", "hiding", "exposing",
+    "export",
+    "namespace", "section",
+    "parameter", "parameters", "variable", "variables", "universe",
+    "universes", "include", "omit",
+    "protected", "private", "noncomputable", "meta", "mutual",
+    "theory",
+    "definition", "def", "constant", "constants", "lemma", "theorem", "example",
+    "axiom", "axioms",
+    "inductive", "structure", "class", "extends",
+    "begin", "end", "match", "calc", "this", "with", "have",
+    "show", "suffices", "by", "in", "at", "let", "forall", "Pi", "fun",
+    "exists", "if", "dif", "then", "else",
+    "assume", "from", "to", "do",
+    "using", "using_well_founded",
+    "instance", "attribute",
+    "precedence",
+    "infix", "infixl", "infixr", "notation", "postfix", "prefix",
+    "reserve", "local",
+    "set_option",
+    "run_command",
+    "alias", "declare_trace", "add_key_equivalence", "aliases",
+    "register_simp_ext",
+    "help", "print", "eval", "check",
+];
+
 const DEFAULT_KEYWORDS: &[&str] = &[];
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
@@ -962,6 +990,7 @@ fn keywords_for_path(path: Option<&Path>) -> &'static [&'static str] {
     {
         Some("rs") => RUST_KEYWORDS,
         Some("scala") => SCALA3_ALL_KEYWORDS,
+        Some("lean") => LEAN_KEYWORDS,
         _ => DEFAULT_KEYWORDS,
     }
 }
