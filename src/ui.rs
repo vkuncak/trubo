@@ -41,7 +41,6 @@ struct Theme {
     editor_line_number_fg: Color,
     editor_line_number_bg: Color,
     editor_selection_bg: Color,
-    editor_selection_fg: Color,
 }
 
 const CURRENT_THEME: Theme = Theme {
@@ -73,7 +72,6 @@ const CURRENT_THEME: Theme = Theme {
     editor_line_number_fg: Color::Rgb(0, 60, 0),
     editor_line_number_bg: Color::Rgb(200, 200, 200),
     editor_selection_bg: Color::Rgb(180, 240, 240),
-    editor_selection_fg: Color::Rgb(0, 0, 0),
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -84,11 +82,9 @@ enum TokenKind {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum RunStyle {
-    Normal,
-    Identifier,
-    Keyword,
-    Selected,
+struct RunStyle {
+    token: TokenKind,
+    selected: bool,
 }
 
 const RUST_KEYWORDS: &[&str] = &[
@@ -941,21 +937,23 @@ fn render_editor_segment(
             .get(absolute_col)
             .copied()
             .unwrap_or(TokenKind::Plain);
-        let style = if selected {
-            RunStyle::Selected
-        } else if token == TokenKind::Keyword {
-            RunStyle::Keyword
-        } else if token == TokenKind::Identifier {
-            RunStyle::Identifier
-        } else {
-            RunStyle::Normal
+        let style = RunStyle {
+            token,
+            selected,
         };
 
         if run_style == Some(style) || run_style.is_none() {
             run.push(character);
             run_style = Some(style);
         } else {
-            push_editor_run(&mut spans, &run, run_style.unwrap_or(RunStyle::Normal));
+            push_editor_run(
+                &mut spans,
+                &run,
+                run_style.unwrap_or(RunStyle {
+                    token: TokenKind::Plain,
+                    selected: false,
+                }),
+            );
             run.clear();
             run.push(character);
             run_style = Some(style);
@@ -963,14 +961,28 @@ fn render_editor_segment(
     }
 
     if !run.is_empty() {
-        push_editor_run(&mut spans, &run, run_style.unwrap_or(RunStyle::Normal));
+        push_editor_run(
+            &mut spans,
+            &run,
+            run_style.unwrap_or(RunStyle {
+                token: TokenKind::Plain,
+                selected: false,
+            }),
+        );
     }
 
     if full_width_selected && text_cols > 0 {
         let rendered_cols = line.chars().skip(segment_start).take(text_cols).count();
         if rendered_cols < text_cols {
             let padding = " ".repeat(text_cols - rendered_cols);
-            push_editor_run(&mut spans, &padding, RunStyle::Selected);
+            push_editor_run(
+                &mut spans,
+                &padding,
+                RunStyle {
+                    token: TokenKind::Plain,
+                    selected: true,
+                },
+            );
         }
     }
 
@@ -1114,21 +1126,22 @@ fn is_identifier_continue(character: char) -> bool {
 }
 
 fn push_editor_run(spans: &mut Vec<Span<'static>>, run: &str, style: RunStyle) {
-    let style = match style {
-        RunStyle::Selected => Style::default()
-            .fg(CURRENT_THEME.editor_selection_fg)
-            .bg(CURRENT_THEME.editor_selection_bg),
-            // .add_modifier(Modifier::BOLD),
-        RunStyle::Identifier => Style::default()
+    let mut rendered_style = match style.token {
+        TokenKind::Identifier => Style::default()
             .fg(CURRENT_THEME.editor_identifier_fg)
             .bg(CURRENT_THEME.editor_text_bg),
-        RunStyle::Keyword => Style::default()
+        TokenKind::Keyword => Style::default()
             .fg(CURRENT_THEME.editor_text_fg)
             .bg(CURRENT_THEME.editor_text_bg)
             .add_modifier(Modifier::BOLD),
-        RunStyle::Normal => Style::default()
+        TokenKind::Plain => Style::default()
             .fg(CURRENT_THEME.editor_text_fg)
             .bg(CURRENT_THEME.editor_text_bg),
     };
-    spans.push(Span::styled(run.to_string(), style));
+
+    if style.selected {
+        rendered_style = rendered_style.bg(CURRENT_THEME.editor_selection_bg);
+    }
+
+    spans.push(Span::styled(run.to_string(), rendered_style));
 }
