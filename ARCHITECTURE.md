@@ -5,7 +5,7 @@ It currently uses absolute line numbers for references to individual functions. 
 
 ## Overview
 
-`trubo` is a single-process, single-threaded terminal text editor with an integrated file browser.
+ `trubo` is a single-process, single-threaded terminal text editor with an integrated file browser.
 
 At a high level, the application is organized into these layers:
 

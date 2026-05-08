@@ -29,6 +29,7 @@ struct Theme {
     menu_active_bg: Color,
     menu_active_fg: Color,
     menu_active_hotkey_fg: Color,
+    dialog_background: Color,
     status_bar_bg: Color,
     status_bar_fg: Color,
     status_hotkey_fg: Color,
@@ -60,6 +61,7 @@ const CURRENT_THEME: Theme = Theme {
     menu_active_bg: Color::Rgb(0, 170, 170),
     menu_active_fg: Color::Rgb(0, 0, 0),
     menu_active_hotkey_fg: Color::Rgb(170, 0, 0),
+    dialog_background: Color::Rgb(210, 230, 255),
     status_bar_bg: Color::Rgb(200, 200, 200),
     status_bar_fg: Color::Rgb(0, 0, 0),
     status_hotkey_fg: Color::Rgb(170, 0, 0),
@@ -167,7 +169,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.help_open {
         draw_help(frame, centered(root, 84, 28));
     } else if let Some(dialog) = app.dialog {
-        draw_dialog(frame, app, dialog, centered(root, 72, 12));
+        match dialog {
+            Dialog::About => draw_dialog(frame, app, dialog, centered(root, 60, 10)),
+            Dialog::SaveFile => draw_dialog(frame, app, dialog, centered(root, 72, 10)),
+        }
     }
 }
 
@@ -313,12 +318,12 @@ fn draw_menu_dropdown(frame: &mut Frame, app: &mut App) {
         .border_style(
             Style::default()
                 .fg(CURRENT_THEME.panel_border_active)
-                .bg(CURRENT_THEME.menu_active_bg),
+                .bg(CURRENT_THEME.dialog_background),
         )
         .style(
             Style::default()
                 .fg(CURRENT_THEME.menu_bar_fg)
-                .bg(CURRENT_THEME.menu_bar_bg),
+                .bg(CURRENT_THEME.dialog_background),
         );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -779,7 +784,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
             .style(
                 Style::default()
                     .fg(CURRENT_THEME.menu_bar_fg)
-                    .bg(CURRENT_THEME.menu_bar_bg),
+                    .bg(CURRENT_THEME.dialog_background),
             )
             .alignment(Alignment::Left)
             .wrap(Wrap { trim: true }),
@@ -790,10 +795,10 @@ fn draw_help(frame: &mut Frame, area: Rect) {
 fn help_bindings_line(items: &[(&str, &str)]) -> Line<'static> {
     let base = Style::default()
         .fg(CURRENT_THEME.menu_bar_fg)
-        .bg(CURRENT_THEME.menu_bar_bg);
+        .bg(CURRENT_THEME.dialog_background);
     let key = Style::default()
         .fg(CURRENT_THEME.status_hotkey_fg)
-        .bg(CURRENT_THEME.menu_bar_bg)
+        .bg(CURRENT_THEME.dialog_background)
         .add_modifier(Modifier::BOLD);
 
     let mut spans = Vec::new();
@@ -813,83 +818,125 @@ fn help_section_line(title: &str) -> Line<'static> {
         title.to_string(),
         Style::default()
             .fg(CURRENT_THEME.menu_bar_fg)
-            .bg(CURRENT_THEME.menu_bar_bg)
+            .bg(CURRENT_THEME.dialog_background)
             .add_modifier(Modifier::BOLD),
     )])
 }
 
 fn draw_dialog(frame: &mut Frame, app: &App, dialog: Dialog, area: Rect) {
     frame.render_widget(Clear, area);
-    let title = match dialog {
-        Dialog::About => " About trubo ",
-        Dialog::SaveFile => " Save File ",
-    };
+    match dialog {
+        Dialog::About => draw_about_dialog(frame, area),
+        Dialog::SaveFile => draw_save_file_dialog(frame, app, area),
+    }
+}
+
+fn draw_about_dialog(frame: &mut Frame, area: Rect) {
     let block = Block::default()
-        .title(title)
+        .title(" About trubo ")
         .borders(Borders::ALL)
         .border_type(BorderType::Double)
         .border_style(
             Style::default()
                 .fg(CURRENT_THEME.panel_border_active)
-                .bg(CURRENT_THEME.menu_active_bg),
+                .bg(CURRENT_THEME.dialog_background),
         )
         .style(
             Style::default()
                 .fg(CURRENT_THEME.menu_bar_fg)
-                .bg(CURRENT_THEME.menu_bar_bg),
+                .bg(CURRENT_THEME.dialog_background),
         );
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let text = match dialog {
-        Dialog::About => Text::from(vec![
-            Line::from(""),
-            Line::from(vec![Span::styled(
-                "trubo 0.1",
-                Style::default().add_modifier(Modifier::BOLD),
-            )]),
-            Line::from(""),
-            Line::from("Retro DOS-style terminal text editor"),
-            Line::from("with a built-in file browser."),
-            Line::from(""),
-            Line::from("Press any key to return."),
-        ]),
-        Dialog::SaveFile => {
-            let path = app.current_file_label();
-            let file_name = app
-                .editor
-                .path()
-                .and_then(|path| path.file_name())
-                .and_then(|name| name.to_str())
-                .unwrap_or("Untitled")
-                .to_string();
-            Text::from(vec![
-                Line::from(""),
-                Line::from(vec![Span::styled(
-                    "Save File",
-                    Style::default().add_modifier(Modifier::BOLD),
-                )]),
-                Line::from(""),
-                Line::from(path),
-                Line::from(file_name),
-                Line::from(""),
-                Line::from("Y = Save and exit"),
-                Line::from("N = Exit without saving"),
-                Line::from("Esc = Stay in application"),
-            ])
-        }
-    };
+    let text = Text::from(vec![
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "trubo 0.1",
+            Style::default().add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(""),
+        Line::from("Retro DOS-style terminal text editor"),
+        Line::from("with a built-in file browser."),
+        Line::from(""),
+        Line::from("Press any key to return."),
+    ]);
 
     frame.render_widget(
         Paragraph::new(text)
             .style(
                 Style::default()
                     .fg(CURRENT_THEME.menu_bar_fg)
-                    .bg(CURRENT_THEME.menu_bar_bg),
+                    .bg(CURRENT_THEME.dialog_background),
             )
             .alignment(Alignment::Center)
             .wrap(Wrap { trim: true }),
         inner,
+    );
+}
+
+fn draw_save_file_dialog(frame: &mut Frame, app: &App, area: Rect) {
+    let (path, file_name) = match app.editor.path() {
+        Some(path) => {
+            let directory = path
+                .parent()
+                .and_then(|parent| parent.to_str())
+                .unwrap_or("")
+                .to_string();
+            let file_name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("Untitled")
+                .to_string();
+            (directory, file_name)
+        }
+        None => (String::new(), String::from("Untitled")),
+    };
+    let base = Style::default()
+        .fg(CURRENT_THEME.status_bar_fg)
+        .bg(CURRENT_THEME.dialog_background);
+    let file_style = base.add_modifier(Modifier::BOLD);
+    let key = Style::default()
+        .fg(CURRENT_THEME.status_hotkey_fg)
+        .bg(CURRENT_THEME.dialog_background)
+        .add_modifier(Modifier::BOLD);
+
+    frame.render_widget(
+        Block::default().style(Style::default().bg(CURRENT_THEME.dialog_background)),
+        area,
+    );
+    let content_area = area.inner(Margin {
+        vertical: 0,
+        horizontal: 2,
+    });
+
+    let text = Text::from(vec![
+        Line::from(""),
+        Line::from(vec![Span::styled("Save File Before Exiting?", key)]),
+        Line::from(""),
+        Line::from(vec![Span::styled(path, base)]),
+        Line::from(vec![Span::styled(file_name, file_style)]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Y", key),
+            Span::styled(" = Save and exit", base),
+        ]),
+        Line::from(vec![
+            Span::styled("N", key),
+            Span::styled(" = Exit without saving, changes lost!", base),
+        ]),
+        Line::from(vec![
+            Span::styled("Esc", key),
+            Span::styled(" = Stay in application and continue editing", base),
+        ]),
+    ]);
+
+    frame.render_widget(
+        Paragraph::new(text)
+            .style(Style::default().bg(CURRENT_THEME.dialog_background))
+            .alignment(Alignment::Left)
+            .wrap(Wrap { trim: true }),
+        content_area,
     );
 }
 
