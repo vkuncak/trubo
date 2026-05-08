@@ -1,22 +1,11 @@
 # trubo
 
-trubo is a retro TUI text editor.
+trubo is a retro TUI text editor written in Rust.
 
 Status: experimental nostalgia project. It edits text files, browses
 directories, and keeps the UI intentionally loud.
 
-It's based on TRUST from which this was forked.
-
-## FAQ
-
-**Why?**  
-Because Rust deserves a blue-screen IDE from the olden days and someone had to do this.
-
-**Does it save my files?**  
-Yes. Use `F2` or `Ctrl+S`. trubo marks dirty buffers with `*` in the editor title. Still, this is more of a fun project so use at your own risk.
-
-**Is this affiliated with any classic DOS IDE vendor?**  
-No. trubo is an independent nostalgia project inspired by classic DOS development environments.
+It's based on TRUST ( https://github.com/wojtczyk/trust ) from which this was forked.
 
 ## Run
 
@@ -27,6 +16,16 @@ cargo run -- /path/to/file-or-directory
 If no path is supplied, trubo opens the current directory. If a file path is
 supplied, trubo opens that file directly and uses its parent directory for the
 browser pane.
+
+## Features
+
+Editing files including Shift-Cursor selection, copy, paste and line wrap.
+
+Loading and saving files.
+
+Navigating directories with quick preview.
+
+Illustration of syntax coloring.
 
 ## Keys
 
