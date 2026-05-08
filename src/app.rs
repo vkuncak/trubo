@@ -230,6 +230,14 @@ impl App {
         self.status = format!("Focus: {}", self.focus_name());
     }
 
+    pub fn focus_browser(&mut self) {
+        self.set_focus(Focus::Browser);
+    }
+
+    pub fn focus_editor(&mut self) {
+        self.set_focus(Focus::Editor);
+    }
+
     fn set_focus(&mut self, focus: Focus) {
         self.close_menu();
         self.focus = focus;
@@ -878,11 +886,6 @@ impl App {
         } else {
             self.editor.set_cursor(file_row, file_col);
         }
-        self.status = format!(
-            "Cursor: line {}, column {}",
-            self.editor.cursor_row() + 1,
-            self.editor.cursor_col() + 1
-        );
     }
 
     pub fn editor_line_number_width(&self) -> u16 {

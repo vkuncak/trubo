@@ -90,7 +90,7 @@ fn print_usage() {
     println!("  trubo [FILE_OR_DIRECTORY]");
     println!();
     println!(
-        "Keys: F1 Help, F2 Save, F3 Open, F4 Focus, F5 Run, Ctrl+Space Select, F9 Build, Ctrl+Q Quit"
+        "Keys: F1 Help, F2 Save, F3 Open, F4 Focus, Ctrl+Left Files, Ctrl+Right Edit, F5 Run, Ctrl+Space Select, F9 Build, Ctrl+Q Quit"
     );
 }
 
@@ -171,6 +171,8 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
 
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
+            KeyCode::Left => app.focus_browser(),
+            KeyCode::Right => app.focus_editor(),
             KeyCode::Char('c') | KeyCode::Char('C') => app.copy_selection(),
             KeyCode::Char('x') | KeyCode::Char('X') => app.cut_selection(),
             KeyCode::Char('v') | KeyCode::Char('V') => app.paste_from_clipboard(),

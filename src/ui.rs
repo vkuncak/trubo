@@ -19,6 +19,7 @@ struct Theme {
     panel_text_secondary: Color,
     panel_text_muted: Color,
     panel_title_text: Color,
+    browser_header_bg: Color,
     menu_brand_bg: Color,
     menu_brand_fg: Color,
     menu_bar_bg: Color,
@@ -30,7 +31,8 @@ struct Theme {
     status_bar_bg: Color,
     status_bar_fg: Color,
     status_hotkey_fg: Color,
-    selected_bg: Color,
+    browser_selected_active_bg: Color,
+    browser_selected_inactive_bg: Color,
     selected_fg: Color,
     editor_text_fg: Color,
     editor_text_bg: Color,
@@ -50,6 +52,7 @@ const CURRENT_THEME: Theme = Theme {
     panel_text_secondary: Color::Rgb(0, 20, 20),
     panel_text_muted: Color::Rgb(85, 85, 85),
     panel_title_text: Color::Rgb(0, 0, 80),
+    browser_header_bg: Color::Rgb(210, 230, 255),
     menu_brand_bg: Color::Rgb(200, 200, 200),
     menu_brand_fg: Color::Rgb(255, 255, 85),
     menu_bar_bg: Color::Rgb(200, 200, 200),
@@ -61,7 +64,8 @@ const CURRENT_THEME: Theme = Theme {
     status_bar_bg: Color::Rgb(200, 200, 200),
     status_bar_fg: Color::Rgb(0, 0, 0),
     status_hotkey_fg: Color::Rgb(170, 0, 0),
-    selected_bg: Color::Rgb(180, 240, 240),
+    browser_selected_active_bg: Color::Rgb(255, 165, 0),
+    browser_selected_inactive_bg: Color::Rgb(180, 240, 240),
     selected_fg: Color::Rgb(0, 0, 0),
     editor_text_fg: Color::Rgb(0, 0, 0),
     editor_text_bg: Color::Rgb(255, 255, 255),
@@ -133,6 +137,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 fn draw_file_header(frame: &mut Frame, area: Rect, app: &App) {
     let dirty = if app.editor.is_dirty() { " *" } else { "" };
     let label = format!(" {}{} ", app.current_file_label(), dirty);
+    let cursor_line = app.editor.cursor_row() + 1;
+    let cursor_col = app.editor.cursor_col() + 1;
+    let line_width = cursor_line.to_string().len().max(4);
+    let col_width = cursor_col.to_string().len().max(3);
+    let cursor_label = format!(" {:>line_width$}:{:>col_width$} ", cursor_line, cursor_col,);
     let base = Style::default()
         .fg(CURRENT_THEME.status_bar_fg)
         .bg(CURRENT_THEME.status_bar_bg)
@@ -145,8 +154,11 @@ fn draw_file_header(frame: &mut Frame, area: Rect, app: &App) {
     let mut right = Line::from(vec![
         Span::styled("F1", key),
         Span::styled(" Help  ", base),
+        Span::styled("F4", key),
+        Span::styled(" Pane  ", base),
         Span::styled("F10", key),
-        Span::styled(" Menu ", base),
+        Span::styled(" Menu", base),
+        Span::styled(cursor_label, base),
     ]);
     let right_width = right.width();
     let total_width = area.width as usize;
@@ -341,7 +353,7 @@ fn draw_menu_dropdown(frame: &mut Frame, app: &mut App) {
 
 fn draw_desktop(frame: &mut Frame, area: Rect, app: &mut App) {
     let desktop = area.inner(Margin {
-        horizontal: 1,
+        horizontal: 0,
         vertical: 0,
     });
     app.browser_pane_width = clamp_browser_width(desktop.width, app.browser_pane_width);
@@ -367,16 +379,33 @@ fn draw_browser(frame: &mut Frame, area: Rect, app: &mut App) {
         .constraints([Constraint::Min(6), Constraint::Length(6)])
         .split(area);
 
-    let title = format!(" Files: {} ", app.browser_label());
-    let block = retro_block(
-        &title,
-        app.focus == Focus::Browser,
-        Some("Enter Open"),
-        Some("Backspace Up"),
-    );
+    let block = retro_block("", app.focus == Focus::Browser, None, None);
     let inner = block.inner(split[0]);
-    app.geometry.browser_inner = inner;
     frame.render_widget(block, split[0]);
+
+    let header_lines = wrap_path_lines(&app.browser_label(), inner.width);
+    let header_height = (header_lines.len() as u16).min(inner.height);
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(header_height.max(1)),
+            Constraint::Min(0),
+        ])
+        .split(inner);
+    let list_area = sections.get(1).copied().unwrap_or(inner);
+
+    frame.render_widget(
+        Paragraph::new(Text::from(header_lines))
+            .style(
+                Style::default()
+                    .fg(CURRENT_THEME.panel_title_text)
+                    .bg(CURRENT_THEME.browser_header_bg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        sections[0],
+    );
+
+    app.geometry.browser_inner = list_area;
 
     if app.entries.is_empty() {
         frame.render_widget(
@@ -391,13 +420,22 @@ fn draw_browser(frame: &mut Frame, area: Rect, app: &mut App) {
                     .bg(CURRENT_THEME.panel_background),
             )
             .alignment(Alignment::Center),
-            inner,
+            list_area,
         );
         return;
     }
 
-    let height = inner.height as usize;
+    let height = list_area.height as usize;
+    if height == 0 {
+        draw_browser_log(frame, split[1], app);
+        return;
+    }
     let selected = app.selected_entry;
+    let selected_bg = if app.focus == Focus::Browser {
+        CURRENT_THEME.browser_selected_active_bg
+    } else {
+        CURRENT_THEME.browser_selected_inactive_bg
+    };
     let start = selected.saturating_sub(height.saturating_sub(1));
     let items = app
         .entries
@@ -409,7 +447,7 @@ fn draw_browser(frame: &mut Frame, area: Rect, app: &mut App) {
             let style = if index == selected {
                 Style::default()
                     .fg(CURRENT_THEME.selected_fg)
-                    .bg(CURRENT_THEME.selected_bg)
+                    .bg(selected_bg)
                     .add_modifier(Modifier::BOLD)
             } else if entry.is_directory() {
                 Style::default()
@@ -426,7 +464,7 @@ fn draw_browser(frame: &mut Frame, area: Rect, app: &mut App) {
                 format!("    {}", entry.label)
             };
             ListItem::new(Line::from(Span::styled(
-                truncate(&label, inner.width),
+                truncate(&label, list_area.width),
                 style,
             )))
         })
@@ -434,29 +472,26 @@ fn draw_browser(frame: &mut Frame, area: Rect, app: &mut App) {
 
     frame.render_widget(
         List::new(items).style(Style::default().bg(CURRENT_THEME.panel_background)),
-        inner,
+        list_area,
     );
 
     draw_browser_log(frame, split[1], app);
 }
 
 fn draw_browser_log(frame: &mut Frame, area: Rect, app: &App) {
-    let block = Block::default()
-        .title(" Log ")
-        .title_style(
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(area);
+
+    frame.render_widget(
+        Paragraph::new(" Log ").style(
             Style::default()
                 .fg(CURRENT_THEME.panel_title_text)
                 .bg(CURRENT_THEME.panel_background),
-        )
-        .borders(Borders::ALL)
-        .border_style(
-            Style::default()
-                .fg(CURRENT_THEME.panel_border_inactive)
-                .bg(CURRENT_THEME.panel_background),
-        )
-        .style(Style::default().bg(CURRENT_THEME.panel_background));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+        ),
+        sections[0],
+    );
 
     let log_lines = vec![
         Line::from(Span::styled(
@@ -475,7 +510,7 @@ fn draw_browser_log(frame: &mut Frame, area: Rect, app: &App) {
 
     frame.render_widget(
         Paragraph::new(Text::from(log_lines)).wrap(Wrap { trim: false }),
-        inner,
+        sections[1],
     );
 }
 
@@ -672,6 +707,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         )]),
         Line::from(""),
         Line::from("F2 Save     F3 Open selected file    F4 Cycle focus"),
+        Line::from("Ctrl+Left Files pane   Ctrl+Right Editor pane"),
         Line::from("F5 cargo run   Ctrl+Space toggle select mode   F9 cargo build"),
         Line::from("Enter opens the highlighted file or directory."),
         Line::from("Backspace goes to the parent directory."),
@@ -798,7 +834,7 @@ fn retro_block<'a>(
                 .fg(CURRENT_THEME.panel_title_text)
                 .bg(CURRENT_THEME.panel_background),
         )
-        .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
+        .borders(Borders::TOP)
         .border_style(border)
         .style(Style::default().bg(CURRENT_THEME.panel_background));
 
@@ -914,6 +950,86 @@ fn wrapped_rows(line_len: usize, text_cols: usize) -> usize {
         return 1;
     }
     line_len.max(1).div_ceil(text_cols)
+}
+
+fn wrap_path_lines(path: &str, width: u16) -> Vec<Line<'static>> {
+    if width == 0 {
+        return vec![Line::from(String::new())];
+    }
+
+    let width = width as usize;
+    if path.is_empty() {
+        return vec![Line::from(String::new())];
+    }
+
+    let mut pieces = Vec::new();
+    let is_absolute = path.starts_with('/');
+    let segments = path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+
+    if is_absolute {
+        if segments.is_empty() {
+            pieces.push("/".to_string());
+        } else {
+            pieces.push(format!("/{}", segments[0]));
+            for segment in segments.iter().skip(1) {
+                pieces.push(format!("/{segment}"));
+            }
+        }
+    } else if let Some((first, rest)) = segments.split_first() {
+        pieces.push((*first).to_string());
+        for segment in rest {
+            pieces.push(format!("/{segment}"));
+        }
+    }
+
+    let mut lines = Vec::new();
+    let mut current = String::new();
+
+    for piece in pieces {
+        let piece_len = piece.chars().count();
+        let current_len = current.chars().count();
+
+        if current.is_empty() && piece_len <= width {
+            current = piece;
+            continue;
+        }
+
+        if !current.is_empty() && current_len + piece_len <= width {
+            current.push_str(&piece);
+            continue;
+        }
+
+        if !current.is_empty() {
+            lines.push(Line::from(std::mem::take(&mut current)));
+        }
+
+        if piece_len <= width {
+            current = piece;
+            continue;
+        }
+
+        let mut chunk = String::new();
+        for character in piece.chars() {
+            chunk.push(character);
+            if chunk.chars().count() == width {
+                lines.push(Line::from(std::mem::take(&mut chunk)));
+            }
+        }
+        current = chunk;
+    }
+
+    if !current.is_empty() {
+        lines.push(Line::from(current));
+    }
+
+    if lines.is_empty() {
+        vec![Line::from(String::new())]
+    } else {
+        lines
+    }
 }
 
 fn tokenize_line(line: &str) -> Vec<TokenKind> {
