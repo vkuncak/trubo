@@ -126,7 +126,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     if app.help_open {
-        draw_help(frame, centered(root, 72, 15));
+        draw_help(frame, centered(root, 78, 22));
     } else if let Some(dialog) = app.dialog {
         draw_dialog(frame, dialog, centered(root, 60, 10));
     }
@@ -708,24 +708,30 @@ fn draw_help(frame: &mut Frame, area: Rect) {
             Style::default().add_modifier(Modifier::BOLD),
         )]),
         Line::from(""),
-        Line::from("F2 Save     F3 Open selected file    F4 Cycle focus"),
-        Line::from("Ctrl+Left Files pane   Ctrl+Right Editor pane"),
-        Line::from("F5 cargo run   Ctrl+Space toggle select mode   F9 cargo build"),
-        Line::from("Enter opens the highlighted file or directory."),
-        Line::from("Backspace goes to the parent directory."),
-        Line::from("Ctrl+R Run  Ctrl+B Build  Ctrl+Q Quit"),
-        Line::from("Ctrl+C Copy Ctrl+X Cut Ctrl+V Paste Ctrl+Z Undo"),
-        Line::from("Ctrl+Ins Copy  Shift+Ins Paste  Shift+Del Cut"),
-        Line::from("Alt+X Delete line        Alt+U Duplicate line"),
-        Line::from("Shift+Arrows/Home/End/Page extends selection."),
-        Line::from("If Shift+Arrows fail, use Ctrl+Space and cursor keys."),
-        Line::from("Menu: F10 opens, arrows move, Enter activates."),
+        help_bindings_line(&[("F1", "Help"), ("F2", "Save"), ("F3", "Open selected file")]),
+        help_bindings_line(&[("F4", "Cycle pane"), ("Tab", "Cycle pane"), ("Shift+Tab", "Cycle pane")]),
+        help_bindings_line(&[("Ctrl+Left", "Files pane"), ("Ctrl+Right", "Editor pane"), ("F10", "Menu")]),
+        help_bindings_line(&[("F5", "cargo run"), ("F9", "cargo build"), ("Ctrl+Q", "Quit")]),
+        help_bindings_line(&[("Ctrl+S", "Save"), ("Ctrl+O", "Open selected file"), ("Ctrl+F", "Cycle pane")]),
+        help_bindings_line(&[("Ctrl+R", "Run"), ("Ctrl+B", "Build"), ("Ctrl+Space", "Toggle select mode")]),
+        help_bindings_line(&[("Ctrl+C", "Copy"), ("Ctrl+X", "Cut"), ("Ctrl+V", "Paste"), ("Ctrl+Z", "Undo")]),
+        help_bindings_line(&[("Ctrl+Ins", "Copy"), ("Shift+Ins", "Paste"), ("Shift+Del", "Cut")]),
+        help_bindings_line(&[("Alt+X", "Delete line"), ("Alt+U", "Duplicate line")]),
+        Line::from(""),
+        help_section_line("Browser"),
+        help_bindings_line(&[("Up/Down", "Move selection"), ("Home/End", "Jump to first/last")]),
+        help_bindings_line(&[("Enter", "Open file or directory"), ("Backspace", "Parent directory"), ("R", "Refresh")]),
+        help_section_line("Editor"),
+        help_bindings_line(&[("Arrows", "Move cursor"), ("Home/End", "Line start/end"), ("PgUp/PgDn", "Scroll")]),
+        help_bindings_line(&[("Shift+Arrows/Home/End/Pg", "Extend selection"), ("Backspace/Delete", "Delete text")]),
+        help_bindings_line(&[("Enter", "New line"), ("Typing", "Insert text")]),
+        help_section_line("Menus and dialogs"),
+        help_bindings_line(&[("F10/Esc", "Close menu"), ("Arrows", "Move in menu"), ("Enter", "Activate")]),
+        help_bindings_line(&[("Home/End", "First/last menu"), ("Menu hotkeys", "Jump by highlighted letter")]),
+        help_bindings_line(&[("Y/Enter", "Confirm exit"), ("N/Esc", "Cancel exit"), ("Any key", "Close help/about")]),
         Line::from(""),
         Line::from("Mouse: click files to open, drag divider to resize,"),
         Line::from("click or drag inside the editor to move/select text."),
-        Line::from(""),
-        Line::from("Any file extension can be opened as text."),
-        Line::from("Press any key to return."),
     ]);
     frame.render_widget(
         Paragraph::new(text)
@@ -738,6 +744,37 @@ fn draw_help(frame: &mut Frame, area: Rect) {
             .wrap(Wrap { trim: true }),
         inner,
     );
+}
+
+fn help_bindings_line(items: &[(&str, &str)]) -> Line<'static> {
+    let base = Style::default()
+        .fg(CURRENT_THEME.menu_bar_fg)
+        .bg(CURRENT_THEME.menu_bar_bg);
+    let key = Style::default()
+        .fg(CURRENT_THEME.status_hotkey_fg)
+        .bg(CURRENT_THEME.menu_bar_bg)
+        .add_modifier(Modifier::BOLD);
+
+    let mut spans = Vec::new();
+    for (index, (binding, description)) in items.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::styled("   ", base));
+        }
+        spans.push(Span::styled((*binding).to_string(), key));
+        spans.push(Span::styled(format!(" {}", description), base));
+    }
+
+    Line::from(spans)
+}
+
+fn help_section_line(title: &str) -> Line<'static> {
+    Line::from(vec![Span::styled(
+        title.to_string(),
+        Style::default()
+            .fg(CURRENT_THEME.menu_bar_fg)
+            .bg(CURRENT_THEME.menu_bar_bg)
+            .add_modifier(Modifier::BOLD),
+    )])
 }
 
 fn draw_dialog(frame: &mut Frame, dialog: Dialog, area: Rect) {
