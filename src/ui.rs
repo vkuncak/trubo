@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use crate::app::{
     App, Dialog, Focus, Geometry, MENUS, MIN_BROWSER_PANE_WIDTH, MIN_EDITOR_PANE_WIDTH,
     MenuGeometry,
@@ -89,12 +91,25 @@ enum RunStyle {
     Selected,
 }
 
-const KEYWORDS: &[&str] = &[
+const RUST_KEYWORDS: &[&str] = &[
     "as", "break", "const", "continue", "crate", "else", "enum", "extern", "false",
     "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut",
     "pub", "ref", "return", "self", "Self", "static", "struct", "super", "trait",
     "true", "type", "unsafe", "use", "where", "while",
 ];
+
+const SCALA3_ALL_KEYWORDS: &[&str] = &[
+    "abstract", "case", "catch", "class", "def", "do", "else", "enum", "export",
+    "extends", "false", "final", "finally", "for", "given", "if", "implicit",
+    "import", "lazy", "match", "new", "null", "object", "override", "package",
+    "private", "protected", "return", "sealed", "super", "then", "throw", "trait",
+    "true", "try", "type", "val", "var", "while", "with", "yield", ":", "=",
+    "<-", "=>", "<:", ">:", "#", "@", "=>>", "?=>", "as", "derives", "end",
+    "extension", "infix", "inline", "opaque", "open", "transparent", "using", "|",
+    "*", "+", "-",
+];
+
+const DEFAULT_KEYWORDS: &[&str] = &[];
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let root = frame.area();
@@ -542,6 +557,7 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
 
     let mut lines = Vec::with_capacity(text_rows);
     let mut wrap_marker_rows = Vec::new();
+    let keywords = keywords_for_path(app.editor.path());
     let row_offset = app.editor.row_offset();
     let mut segment_offset = app.editor.row_segment_offset();
     let mut file_row = row_offset;
@@ -549,7 +565,7 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
         if let Some(line) = app.editor.lines().get(file_row) {
             let line_len = line.chars().count();
             let wrapped = wrapped_rows(line_len, text_cols);
-            let token_kinds = tokenize_line(line);
+            let token_kinds = tokenize_line(line, keywords);
             let full_width_selected = app
                 .editor
                 .selection_bounds()
@@ -939,6 +955,17 @@ fn wrapped_rows(line_len: usize, text_cols: usize) -> usize {
     line_len.max(1).div_ceil(text_cols)
 }
 
+fn keywords_for_path(path: Option<&Path>) -> &'static [&'static str] {
+    match path
+        .and_then(|path| path.extension())
+        .and_then(|extension| extension.to_str())
+    {
+        Some("rs") => RUST_KEYWORDS,
+        Some("scala") => SCALA3_ALL_KEYWORDS,
+        _ => DEFAULT_KEYWORDS,
+    }
+}
+
 fn wrap_path_lines(path: &str, width: u16) -> Vec<Line<'static>> {
     if width == 0 {
         return vec![Line::from(String::new())];
@@ -1019,7 +1046,7 @@ fn wrap_path_lines(path: &str, width: u16) -> Vec<Line<'static>> {
     }
 }
 
-fn tokenize_line(line: &str) -> Vec<TokenKind> {
+fn tokenize_line(line: &str, keywords: &[&str]) -> Vec<TokenKind> {
     let chars = line.chars().collect::<Vec<_>>();
     let mut kinds = vec![TokenKind::Plain; chars.len()];
     let mut idx = 0;
@@ -1032,7 +1059,7 @@ fn tokenize_line(line: &str) -> Vec<TokenKind> {
                 idx += 1;
             }
             let identifier = chars[start..idx].iter().collect::<String>();
-            let kind = if KEYWORDS.contains(&identifier.as_str()) {
+            let kind = if keywords.contains(&identifier.as_str()) {
                 TokenKind::Keyword
             } else {
                 TokenKind::Identifier

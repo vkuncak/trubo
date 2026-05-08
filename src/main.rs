@@ -7,6 +7,7 @@ mod ui;
 use std::{
     env,
     ffi::OsString,
+    fs,
     io::{self, IsTerminal, Stdout},
     path::PathBuf,
     time::Duration,
@@ -38,10 +39,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("trubo must be run in an interactive terminal".into());
     }
 
-    let target = target.canonicalize().unwrap_or(target);
     if !target.exists() {
-        return Err(format!("No such file or directory: {}", target.display()).into());
+        fs::write(&target, "")?;
     }
+    let target = target.canonicalize().unwrap_or(target);
 
     let mut terminal = setup_terminal()?;
     let mut app = App::new(target.clone());
