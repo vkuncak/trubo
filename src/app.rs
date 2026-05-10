@@ -234,6 +234,7 @@ pub struct App {
     new_directory_name: String,
     pending_file_operation: Option<PendingFileOperation>,
     pending_file_operation_name: String,
+    pending_file_operation_name_cursor: usize,
     full_redraw_requested: bool,
     browser_preview_due_at: Option<Instant>,
     drag_target: Option<DragTarget>,
@@ -272,6 +273,7 @@ impl App {
             new_directory_name: String::new(),
             pending_file_operation: None,
             pending_file_operation_name: String::new(),
+            pending_file_operation_name_cursor: 0,
             full_redraw_requested: false,
             browser_preview_due_at: None,
             drag_target: None,
@@ -449,6 +451,11 @@ impl App {
     pub fn pending_file_operation_name(&self) -> Option<&str> {
         self.pending_file_operation.as_ref()?;
         Some(self.pending_file_operation_name.as_str())
+    }
+
+    pub fn pending_file_operation_name_cursor(&self) -> Option<usize> {
+        self.pending_file_operation.as_ref()?;
+        Some(self.pending_file_operation_name_cursor)
     }
 
     pub fn pending_new_directory_parent(&self) -> Option<String> {
@@ -694,14 +701,35 @@ impl App {
                     Action::None
                 }
                 KeyCode::Backspace => {
-                    self.pending_file_operation_name.pop();
+                    self.delete_file_operation_name_left();
+                    Action::None
+                }
+                KeyCode::Delete => {
+                    self.delete_file_operation_name_right();
+                    Action::None
+                }
+                KeyCode::Left => {
+                    self.move_file_operation_name_cursor_left();
+                    Action::None
+                }
+                KeyCode::Right => {
+                    self.move_file_operation_name_cursor_right();
+                    Action::None
+                }
+                KeyCode::Home => {
+                    self.pending_file_operation_name_cursor = 0;
+                    Action::None
+                }
+                KeyCode::End => {
+                    self.pending_file_operation_name_cursor =
+                        self.pending_file_operation_name.chars().count();
                     Action::None
                 }
                 KeyCode::Char(character)
                     if !_key.modifiers.contains(KeyModifiers::CONTROL)
                         && !_key.modifiers.contains(KeyModifiers::ALT) =>
                 {
-                    self.pending_file_operation_name.push(character);
+                    self.insert_file_operation_name_char(character);
                     Action::None
                 }
                 _ => Action::None,
@@ -1110,19 +1138,32 @@ impl App {
 
         let target_path = match kind {
             FileOperationKind::Delete => None,
-            FileOperationKind::Copy | FileOperationKind::Move => {
+            FileOperationKind::Copy => {
                 if !self.secondary_browser_enabled {
-                    self.status = "Enable second files pane to choose copy/move target".to_string();
+                    self.status = "Enable second files pane to choose copy target".to_string();
                     return;
                 }
 
-                let target_index = 1 - browser_index;
                 let file_name = entry
                     .path
                     .file_name()
                     .map(PathBuf::from)
                     .unwrap_or_else(|| PathBuf::from(&entry.label));
+                let target_index = 1 - browser_index;
                 Some(self.browsers[target_index].dir.join(file_name))
+            }
+            FileOperationKind::Move => {
+                let file_name = entry
+                    .path
+                    .file_name()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from(&entry.label));
+                let target_dir = if self.secondary_browser_enabled {
+                    self.browsers[1 - browser_index].dir.clone()
+                } else {
+                    self.browsers[browser_index].dir.clone()
+                };
+                Some(target_dir.join(file_name))
             }
         };
 
@@ -1140,6 +1181,8 @@ impl App {
                 .and_then(|operation| operation.source_path.file_name())
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default();
+            self.pending_file_operation_name_cursor =
+                self.pending_file_operation_name.chars().count();
             self.dialog = Some(Dialog::FileOperationName);
             self.status = format!("Choose new name for {}", kind.label());
             return;
@@ -1204,7 +1247,7 @@ impl App {
     }
 
     fn confirm_file_operation_name(&mut self) {
-        let Some(operation) = self.pending_file_operation.as_mut() else {
+        let Some(operation) = self.pending_file_operation.as_ref() else {
             self.dialog = None;
             return;
         };
@@ -1225,15 +1268,62 @@ impl App {
             return;
         };
 
-        operation.target_path = Some(parent.join(name));
-        self.dialog = Some(Dialog::ConfirmFileOperation);
-        self.status = format!("Confirm {}", operation.kind.label());
+        let target_path = parent.join(name);
+        if let Some(operation) = self.pending_file_operation.as_mut() {
+            operation.target_path = Some(target_path);
+        }
+        self.confirm_pending_file_operation();
     }
 
     fn clear_file_operation_request(&mut self) {
         self.dialog = None;
         self.pending_file_operation = None;
         self.pending_file_operation_name.clear();
+        self.pending_file_operation_name_cursor = 0;
+    }
+
+    fn insert_file_operation_name_char(&mut self, character: char) {
+        let byte_index = char_to_byte_index(
+            &self.pending_file_operation_name,
+            self.pending_file_operation_name_cursor,
+        );
+        self.pending_file_operation_name.insert(byte_index, character);
+        self.pending_file_operation_name_cursor += 1;
+    }
+
+    fn delete_file_operation_name_left(&mut self) {
+        if self.pending_file_operation_name_cursor == 0 {
+            return;
+        }
+
+        let remove_at = self.pending_file_operation_name_cursor - 1;
+        let byte_index = char_to_byte_index(&self.pending_file_operation_name, remove_at);
+        self.pending_file_operation_name.remove(byte_index);
+        self.pending_file_operation_name_cursor = remove_at;
+    }
+
+    fn delete_file_operation_name_right(&mut self) {
+        if self.pending_file_operation_name_cursor >= self.pending_file_operation_name.chars().count()
+        {
+            return;
+        }
+
+        let byte_index = char_to_byte_index(
+            &self.pending_file_operation_name,
+            self.pending_file_operation_name_cursor,
+        );
+        self.pending_file_operation_name.remove(byte_index);
+    }
+
+    fn move_file_operation_name_cursor_left(&mut self) {
+        self.pending_file_operation_name_cursor =
+            self.pending_file_operation_name_cursor.saturating_sub(1);
+    }
+
+    fn move_file_operation_name_cursor_right(&mut self) {
+        let len = self.pending_file_operation_name.chars().count();
+        self.pending_file_operation_name_cursor =
+            (self.pending_file_operation_name_cursor + 1).min(len);
     }
 
     fn confirm_pending_file_operation(&mut self) {
@@ -1668,6 +1758,14 @@ fn first_selectable_item(menu_index: usize) -> usize {
         .iter()
         .position(|item| !item.separator)
         .unwrap_or(0)
+}
+
+fn char_to_byte_index(value: &str, char_index: usize) -> usize {
+    value
+        .char_indices()
+        .nth(char_index)
+        .map(|(byte_index, _)| byte_index)
+        .unwrap_or(value.len())
 }
 
 fn shell_quote(path: &Path) -> String {

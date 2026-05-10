@@ -1085,6 +1085,7 @@ fn draw_file_operation_name_dialog(frame: &mut Frame, app: &App, area: Rect) {
         .unwrap_or("New file name");
     let parent = app.pending_file_operation_parent().unwrap_or_default();
     let name = app.pending_file_operation_name().unwrap_or_default();
+    let cursor_col = app.pending_file_operation_name_cursor().unwrap_or(name.chars().count());
 
     let base = Style::default()
         .fg(CURRENT_THEME.status_bar_fg)
@@ -1117,7 +1118,7 @@ fn draw_file_operation_name_dialog(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled(name.to_string(), base),
         ]),
         Line::from(""),
-        Line::from(vec![Span::styled("Enter", key), Span::styled(" = Continue", base)]),
+        Line::from(vec![Span::styled("Enter", key), Span::styled(" = Apply", base)]),
         Line::from(vec![Span::styled("Esc", key), Span::styled(" = Cancel", base)]),
     ]);
 
@@ -1132,7 +1133,7 @@ fn draw_file_operation_name_dialog(frame: &mut Frame, app: &App, area: Rect) {
     let cursor_x = content_area
         .x
         .saturating_add("Name: ".chars().count() as u16)
-        .saturating_add(name.chars().count() as u16);
+        .saturating_add(cursor_col as u16);
     let cursor_y = content_area.y.saturating_add(6);
     if cursor_x < content_area.x.saturating_add(content_area.width)
         && cursor_y < content_area.y.saturating_add(content_area.height)
