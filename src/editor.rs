@@ -51,6 +51,7 @@ pub struct Editor {
     viewport_cols: usize,
     selection_anchor: Option<Position>,
     undo_stack: Vec<UndoState>,
+    redo_stack: Vec<UndoState>,
     dirty: bool,
 }
 
@@ -69,6 +70,7 @@ impl Editor {
             viewport_cols: 72,
             selection_anchor: None,
             undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
             dirty: false,
         }
     }
@@ -87,6 +89,7 @@ impl Editor {
             viewport_cols: 72,
             selection_anchor: None,
             undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
             dirty: false,
         }
     }
@@ -113,6 +116,7 @@ impl Editor {
             viewport_cols: 72,
             selection_anchor: None,
             undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
             dirty: false,
         })
     }
@@ -474,6 +478,27 @@ impl Editor {
             return false;
         };
 
+        self.push_redo_state();
+
+        self.lines = state.lines;
+        self.cursor_row = state.cursor_row;
+        self.cursor_col = state.cursor_col;
+        self.row_offset = state.row_offset;
+        self.row_segment_offset = state.row_segment_offset;
+        self.col_offset = state.col_offset;
+        self.selection_anchor = state.selection_anchor;
+        self.dirty = state.dirty;
+        self.keep_cursor_visible();
+        true
+    }
+
+    pub fn redo(&mut self) -> bool {
+        let Some(state) = self.redo_stack.pop() else {
+            return false;
+        };
+
+        self.push_undo_state();
+
         self.lines = state.lines;
         self.cursor_row = state.cursor_row;
         self.cursor_col = state.cursor_col;
@@ -654,11 +679,22 @@ impl Editor {
     }
 
     fn capture_undo_state(&mut self) {
-        if self.undo_stack.len() == MAX_UNDO_HISTORY {
-            self.undo_stack.remove(0);
-        }
+        self.redo_stack.clear();
+        self.push_undo_state();
+    }
 
-        self.undo_stack.push(UndoState {
+    fn push_undo_state(&mut self) {
+        let state = self.snapshot();
+        push_history_state(&mut self.undo_stack, state);
+    }
+
+    fn push_redo_state(&mut self) {
+        let state = self.snapshot();
+        push_history_state(&mut self.redo_stack, state);
+    }
+
+    fn snapshot(&self) -> UndoState {
+        UndoState {
             lines: self.lines.clone(),
             cursor_row: self.cursor_row,
             cursor_col: self.cursor_col,
@@ -667,7 +703,7 @@ impl Editor {
             col_offset: self.col_offset,
             selection_anchor: self.selection_anchor,
             dirty: self.dirty,
-        });
+        }
     }
 
     fn current_position(&self) -> Position {
@@ -754,6 +790,13 @@ fn wrapped_rows(line_len: usize, cols: usize) -> usize {
 
 fn is_binary_bytes(bytes: &[u8]) -> bool {
     bytes.contains(&0) || std::str::from_utf8(bytes).is_err()
+}
+
+fn push_history_state(stack: &mut Vec<UndoState>, state: UndoState) {
+    if stack.len() == MAX_UNDO_HISTORY {
+        stack.remove(0);
+    }
+    stack.push(state);
 }
 
 #[cfg(test)]
@@ -978,6 +1021,39 @@ mod tests {
         assert_eq!(editor.lines(), &["".to_string()]);
 
         assert!(!editor.undo());
+    }
+
+    #[test]
+    fn redo_reapplies_undone_edits_in_order() {
+        let mut editor = Editor::scratch();
+        editor.insert_text("abc");
+        editor.insert_char('d');
+        editor.backspace();
+
+        assert!(editor.undo());
+        assert!(editor.undo());
+        assert_eq!(editor.lines(), &["abc".to_string()]);
+
+        assert!(editor.redo());
+        assert_eq!(editor.lines(), &["abcd".to_string()]);
+
+        assert!(editor.redo());
+        assert_eq!(editor.lines(), &["abc".to_string()]);
+
+        assert!(!editor.redo());
+    }
+
+    #[test]
+    fn redo_is_cleared_by_new_edit() {
+        let mut editor = Editor::scratch();
+        editor.insert_text("abc");
+        editor.insert_char('d');
+
+        assert!(editor.undo());
+        editor.insert_char('x');
+
+        assert!(!editor.redo());
+        assert_eq!(editor.lines(), &["abcx".to_string()]);
     }
 
     #[test]

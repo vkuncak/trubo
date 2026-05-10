@@ -856,6 +856,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         help_bindings_line(&[("`", "Toggle second files pane")]),
         help_bindings_line(&[("Ctrl+Space", "Toggle select mode")]),
         help_bindings_line(&[("Ctrl+C", "Copy"), ("Ctrl+X", "Cut"), ("Ctrl+V", "Paste"), ("Ctrl+Z", "Undo")]),
+        help_bindings_line(&[("Ctrl+Y", "Redo")]),
         help_bindings_line(&[("Ctrl+Ins", "Copy"), ("Shift+Ins", "Paste"), ("Shift+Del", "Cut")]),
         help_bindings_line(&[("Alt+X", "Delete line"), ("Alt+U", "Duplicate line")]),
         Line::from(""),

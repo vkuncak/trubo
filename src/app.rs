@@ -31,6 +31,9 @@ pub const MENUS: [Menu; 6] = [
     Menu {
         title: "Edit",
         items: &[
+            MenuItem::action("Undo", "Ctrl+Z", MenuAction::Undo),
+            MenuItem::action("Redo", "Ctrl+Y", MenuAction::Redo),
+            MenuItem::separator(),
             MenuItem::action("Copy", "Ctrl+C", MenuAction::Copy),
             MenuItem::action("Cut", "Ctrl+X", MenuAction::Cut),
             MenuItem::action("Paste", "Ctrl+V", MenuAction::Paste),
@@ -114,6 +117,8 @@ pub enum MenuAction {
     Open,
     Save,
     Quit,
+    Undo,
+    Redo,
     Copy,
     Cut,
     Paste,
@@ -921,6 +926,8 @@ impl App {
                 self.save_current();
             }
             MenuAction::Quit => return self.request_quit(),
+            MenuAction::Undo => self.undo_last_edit(),
+            MenuAction::Redo => self.redo_last_edit(),
             MenuAction::Copy => self.copy_selection(),
             MenuAction::Cut => self.cut_selection(),
             MenuAction::Paste => self.paste_from_clipboard(),
@@ -999,6 +1006,18 @@ impl App {
             self.status = "Undo applied".to_string();
         } else {
             self.status = "Nothing to undo".to_string();
+        }
+    }
+
+    pub fn redo_last_edit(&mut self) {
+        self.dialog = None;
+        self.help_open = false;
+        self.assign_focus(Focus::Editor);
+
+        if self.editor.redo() {
+            self.status = "Redo applied".to_string();
+        } else {
+            self.status = "Nothing to redo".to_string();
         }
     }
 
