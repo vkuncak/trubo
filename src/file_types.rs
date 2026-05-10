@@ -222,7 +222,7 @@ const FILE_TYPES: &[FileTypeSpec] = &[
     FileTypeSpec {
         extension: "ml",
         keywords: OCAML_KEYWORDS,
-        comment_line_pattern: Some("\\(\\*"),
+        comment_line_pattern: None,
         run: Some(ToolInvocation::Program {
             program: "ocaml",
             args: &[],
@@ -237,7 +237,7 @@ const FILE_TYPES: &[FileTypeSpec] = &[
     FileTypeSpec {
         extension: "mli",
         keywords: OCAML_KEYWORDS,
-        comment_line_pattern: Some("\\(\\*"),
+        comment_line_pattern: None,
         run: None,
         build: Some(ToolInvocation::Program {
             program: "ocamlc",
@@ -287,6 +287,10 @@ pub fn file_type_for_shebang(line: &str) -> Option<&'static FileTypeSpec> {
 
     if matches_interpreter(interpreter, &["tsx", "ts-node", "deno", "bun"]) {
         return file_type_for_extension("ts");
+    }
+
+    if matches_interpreter(interpreter, &["lean", "lake"]) {
+        return file_type_for_extension("lean");
     }
 
     if matches_interpreter(interpreter, &["ocaml"]) {
@@ -385,6 +389,13 @@ mod tests {
     }
 
     #[test]
+    fn detects_env_lean_shebang() {
+        let spec = file_type_for_shebang("#!/usr/bin/env lean")
+            .expect("expected lean detection");
+        assert_eq!(spec.extension, "lean");
+    }
+
+    #[test]
     fn falls_back_to_shebang_when_extension_is_unknown() {
         let path = Path::new("script.custom");
         let spec = detect_file_type(Some(path), Some("#!/bin/bash"))
@@ -404,5 +415,12 @@ mod tests {
         let spec = file_type_for_extension("lean").expect("expected lean file type");
         let start = comment_start_for_line(spec, "theorem demo := by -- explanation");
         assert_eq!(start, Some(19));
+    }
+
+    #[test]
+    fn ocaml_has_no_line_comment_pattern() {
+        let spec = file_type_for_extension("ml").expect("expected ocaml file type");
+        let start = comment_start_for_line(spec, "let x = 1 (* not handled");
+        assert_eq!(start, None);
     }
 }
