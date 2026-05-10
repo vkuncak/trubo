@@ -1,6 +1,7 @@
 mod app;
 mod clipboard;
 mod editor;
+mod file_types;
 mod project;
 mod ui;
 

@@ -13,6 +13,7 @@ use ratatui::layout::Rect;
 
 use crate::{
     editor::Editor,
+    file_types::{ToolInvocation, detect_file_type},
     project::{ProjectEntry, list_directory},
 };
 
@@ -393,24 +394,24 @@ impl App {
             return;
         };
 
-        let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or_default();
         let cwd = path.parent().unwrap_or(self.browser_dir.as_path());
 
-        let (command, description) = match extension {
-            "rs" => ("cargo run".to_string(), "cargo run".to_string()),
-            "scala" => (
-                format!("scala {}", shell_quote(path)),
-                format!("scala {}", path.display()),
-            ),
-            "lean" => (
-                format!("lean {}", shell_quote(path)),
-                format!("lean {}", path.display()),
-            ),
-            _ => {
-                self.status = format!("Run is not configured for .{extension}");
-                return;
-            }
+        let Some(spec) = detect_file_type(Some(path), self.editor.lines().first().map(String::as_str)) else {
+            let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or_default();
+            self.status = if extension.is_empty() {
+                "Run is not configured for this file".to_string()
+            } else {
+                format!("Run is not configured for .{extension}")
+            };
+            return;
         };
+
+        let Some(invocation) = spec.run else {
+            self.status = format!("Run is not configured for .{}", spec.extension);
+            return;
+        };
+
+        let (command, description) = format_tool_invocation(path, invocation);
 
         match launch_in_interactive_terminal(cwd, &command) {
             Ok(()) => {
@@ -434,24 +435,24 @@ impl App {
             return;
         };
 
-        let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or_default();
         let cwd = path.parent().unwrap_or(self.browser_dir.as_path());
 
-        let (command, description) = match extension {
-            "rs" => ("cargo build".to_string(), "cargo build".to_string()),
-            "scala" => (
-                format!("scalac {}", shell_quote(path)),
-                format!("scalac {}", path.display()),
-            ),
-            "lean" => (
-                format!("lean {}", shell_quote(path)),
-                format!("lean {}", path.display()),
-            ),
-            _ => {
-                self.status = format!("Build is not configured for .{extension}");
-                return;
-            }
+        let Some(spec) = detect_file_type(Some(path), self.editor.lines().first().map(String::as_str)) else {
+            let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or_default();
+            self.status = if extension.is_empty() {
+                "Build is not configured for this file".to_string()
+            } else {
+                format!("Build is not configured for .{extension}")
+            };
+            return;
         };
+
+        let Some(invocation) = spec.build else {
+            self.status = format!("Build is not configured for .{}", spec.extension);
+            return;
+        };
+
+        let (command, description) = format_tool_invocation(path, invocation);
 
         match launch_in_interactive_terminal(cwd, &command) {
             Ok(()) => {
@@ -1026,6 +1027,35 @@ fn first_selectable_item(menu_index: usize) -> usize {
 fn shell_quote(path: &Path) -> String {
     let value = path.to_string_lossy();
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn format_tool_invocation(path: &Path, invocation: ToolInvocation) -> (String, String) {
+    match invocation {
+        ToolInvocation::Cargo { subcommand } => {
+            let command = format!("cargo {subcommand}");
+            (command.clone(), command)
+        }
+        ToolInvocation::Program {
+            program,
+            args,
+            pass_file_path,
+        } => {
+            let mut command_parts = vec![program.to_string()];
+            command_parts.extend(args.iter().map(|arg| (*arg).to_string()));
+            if pass_file_path {
+                command_parts.push(shell_quote(path));
+                let command = command_parts.join(" ");
+                let description = format!("{} {}", [program].into_iter().chain(args.iter().copied()).collect::<Vec<_>>().join(" "), path.display());
+                (
+                    command,
+                    description,
+                )
+            } else {
+                let command = command_parts.join(" ");
+                (command.clone(), command)
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]

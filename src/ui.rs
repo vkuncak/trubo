@@ -4,6 +4,7 @@ use crate::app::{
     App, Dialog, Focus, Geometry, MENUS, MIN_BROWSER_PANE_WIDTH, MIN_EDITOR_PANE_WIDTH,
     MenuGeometry,
 };
+use crate::file_types::{DEFAULT_KEYWORDS, detect_file_type};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
@@ -94,54 +95,6 @@ struct RunStyle {
     token: TokenKind,
     selected: bool,
 }
-
-const RUST_KEYWORDS: &[&str] = &[
-    "as", "break", "const", "continue", "crate", "else", "enum", "extern", "false",
-    "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut",
-    "pub", "ref", "return", "self", "Self", "static", "struct", "super", "trait",
-    "true", "type", "unsafe", "use", "where", "while",
-];
-
-const SCALA3_ALL_KEYWORDS: &[&str] = &[
-    "abstract", "case", "catch", "class", "def", "do", "else", "enum", "export",
-    "extends", "false", "final", "finally", "for", "given", "if", "implicit",
-    "import", "lazy", "match", "new", "null", "object", "override", "package",
-    "private", "protected", "return", "sealed", "super", "then", "throw", "trait",
-    "true", "try", "type", "val", "var", "while", "with", "yield", ":", "=",
-    "<-", "=>", "<:", ">:", "#", "@", "=>>", "?=>", "as", "derives", "end",
-    "extension", "infix", "inline", "opaque", "open", "transparent", "using", "|",
-    "*", "+", "-",
-];
-
-const LEAN_KEYWORDS: &[&str] = &[
-    "import", "prelude",
-    "open", "as", "renaming", "replacing", "hiding", "exposing",
-    "export",
-    "namespace", "section",
-    "parameter", "parameters", "variable", "variables", "universe",
-    "universes", "include", "omit",
-    "protected", "private", "noncomputable", "meta", "mutual",
-    "theory",
-    "definition", "def", "constant", "constants", "lemma", "theorem", "example",
-    "axiom", "axioms",
-    "inductive", "structure", "class", "extends",
-    "begin", "end", "match", "calc", "this", "with", "have",
-    "show", "suffices", "by", "in", "at", "let", "forall", "Pi", "fun",
-    "exists", "if", "dif", "then", "else",
-    "assume", "from", "to", "do",
-    "using", "using_well_founded",
-    "instance", "attribute",
-    "precedence",
-    "infix", "infixl", "infixr", "notation", "postfix", "prefix",
-    "reserve", "local",
-    "set_option",
-    "run_command",
-    "alias", "declare_trace", "add_key_equivalence", "aliases",
-    "register_simp_ext",
-    "help", "print", "eval", "check",
-];
-
-const DEFAULT_KEYWORDS: &[&str] = &[];
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let root = frame.area();
@@ -585,7 +538,7 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
 
     let mut lines = Vec::with_capacity(text_rows);
     let mut wrap_marker_rows = Vec::new();
-    let keywords = keywords_for_path(app.editor.path());
+    let keywords = keywords_for_editor(app.editor.path(), app.editor.lines().first().map(String::as_str));
     let row_offset = app.editor.row_offset();
     let mut segment_offset = app.editor.row_segment_offset();
     let mut file_row = row_offset;
@@ -1042,16 +995,10 @@ fn wrapped_rows(line_len: usize, text_cols: usize) -> usize {
     line_len.max(1).div_ceil(text_cols)
 }
 
-fn keywords_for_path(path: Option<&Path>) -> &'static [&'static str] {
-    match path
-        .and_then(|path| path.extension())
-        .and_then(|extension| extension.to_str())
-    {
-        Some("rs") => RUST_KEYWORDS,
-        Some("scala") => SCALA3_ALL_KEYWORDS,
-        Some("lean") => LEAN_KEYWORDS,
-        _ => DEFAULT_KEYWORDS,
-    }
+fn keywords_for_editor(path: Option<&Path>, first_line: Option<&str>) -> &'static [&'static str] {
+    detect_file_type(path, first_line)
+        .map(|spec| spec.keywords)
+        .unwrap_or(DEFAULT_KEYWORDS)
 }
 
 fn wrap_path_lines(path: &str, width: u16) -> Vec<Line<'static>> {
