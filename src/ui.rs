@@ -1285,7 +1285,7 @@ fn anchored_search_area(app: &App, root: Rect, width: u16, height: u16) -> Rect 
         return centered(root, width, height);
     };
 
-    placed_rect_near(root, cursor_x.saturating_add(1), cursor_y, width, height)
+    placed_rect_near(root, cursor_x.saturating_add(1), cursor_y.saturating_add(1), width, height)
 }
 
 fn confirm_file_operation_dialog_height(app: &App) -> u16 {

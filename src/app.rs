@@ -1330,6 +1330,7 @@ impl App {
         self.editor.set_cursor(row, start_col);
         self.editor.begin_selection();
         self.editor.select_to(row, end_col);
+        self.editor.center_view_on(row, start_col);
         self.status = format!("Found /{pattern}/ at {}:{}", row + 1, start_col + 1);
     }
 

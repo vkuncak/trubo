@@ -506,6 +506,22 @@ impl Editor {
         self.col_offset = 0;
     }
 
+    pub fn center_view_on(&mut self, row: usize, col: usize) {
+        let position = self.clamp_position(Position { row, col });
+        let cols = self.viewport_cols.max(1);
+        let cursor_abs = self.abs_visual_row(position.row, position.col / cols, cols);
+        let top_abs = if self.viewport_rows > 0 {
+            cursor_abs.saturating_sub(self.viewport_rows / 2)
+        } else {
+            cursor_abs
+        };
+
+        let (row_offset, row_segment_offset) = self.visual_row_to_offset(top_abs, cols);
+        self.row_offset = row_offset;
+        self.row_segment_offset = row_segment_offset;
+        self.col_offset = 0;
+    }
+
     fn move_cursor(&mut self, movement: Movement, selecting: bool) {
         if selecting {
             if self.selection_anchor.is_none() {
@@ -867,6 +883,24 @@ mod tests {
         assert_eq!(editor.cursor_col(), 12);
         assert_eq!(editor.row_offset(), 0);
         assert_eq!(editor.row_segment_offset(), 1);
+    }
+
+    #[test]
+    fn center_view_on_recenters_found_line_when_possible() {
+        let mut editor = Editor::scratch();
+        editor.insert_text(
+            &(0..20)
+                .map(|line| format!("line {line}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        editor.set_viewport(6, 72);
+        editor.set_cursor(0, 0);
+
+        editor.center_view_on(12, 0);
+
+        assert_eq!(editor.row_offset(), 9);
+        assert_eq!(editor.row_segment_offset(), 0);
     }
 
     #[test]
