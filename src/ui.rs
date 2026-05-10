@@ -84,6 +84,18 @@ const CURRENT_THEME: Theme = Theme {
 };
 
 const SECONDARY_BROWSER_GUTTER_WIDTH: u16 = 1;
+const SECONDARY_BROWSER_HEADER_BINDINGS: [(&str, &str); 4] = [
+    ("F5", " Copy  "),
+    ("F6", " Move  "),
+    ("F7", " MkDir  "),
+    ("F8", " Delete "),
+];
+const PRIMARY_HEADER_BINDINGS: [(&str, &str); 4] = [
+    ("F1", " Help  "),
+    ("`", " 2nd  "),
+    ("F4", " Pane  "),
+    ("F10", " Menu"),
+];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TokenKind {
@@ -134,13 +146,15 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         match dialog {
             Dialog::About => draw_dialog(frame, app, dialog, centered(root, 60, 10)),
             Dialog::SaveFile => draw_dialog(frame, app, dialog, centered(root, 72, 10)),
+            Dialog::NewDirectory => draw_dialog(frame, app, dialog, centered(root, 76, 12)),
+            Dialog::ConfirmFileOperation => {
+                draw_dialog(frame, app, dialog, centered(root, 76, 14))
+            }
         }
     }
 }
 
 fn draw_file_header(frame: &mut Frame, area: Rect, app: &App) {
-    let dirty = if app.editor.is_dirty() { " *" } else { "" };
-    let label = format!(" {}{} ", app.current_file_label(), dirty);
     let cursor_line = app.editor.cursor_row() + 1;
     let cursor_col = app.editor.cursor_col() + 1;
     let line_width = cursor_line.to_string().len().max(4);
@@ -155,27 +169,14 @@ fn draw_file_header(frame: &mut Frame, area: Rect, app: &App) {
         .bg(CURRENT_THEME.status_bar_bg)
         .add_modifier(Modifier::BOLD);
 
-    let mut right = Line::from(vec![
-        Span::styled("F1", key),
-        Span::styled(" Help  ", base),
-        Span::styled("F4", key),
-        Span::styled(" Pane  ", base),
-        Span::styled("F10", key),
-        Span::styled(" Menu", base),
-        Span::styled(cursor_label, base),
-    ]);
+    let mut right = Line::from(build_header_right_spans(base, key, &cursor_label));
     let right_width = right.width();
     let total_width = area.width as usize;
 
     let mut spans = Vec::new();
     if total_width > right_width {
         let left_width = total_width - right_width;
-        let left = truncate(&label, left_width as u16);
-        let rendered_left = left.chars().count();
-        spans.push(Span::styled(left, base));
-        if rendered_left < left_width {
-            spans.push(Span::styled(" ".repeat(left_width - rendered_left), base));
-        }
+        spans.extend(build_header_left_spans(app, left_width as u16, base, key));
     }
     spans.append(&mut right.spans);
 
@@ -183,6 +184,81 @@ fn draw_file_header(frame: &mut Frame, area: Rect, app: &App) {
         Paragraph::new(Line::from(spans)).style(base),
         area,
     );
+}
+
+fn build_header_left_spans(app: &App, width: u16, base: Style, key: Style) -> Vec<Span<'static>> {
+    if app.focus == Focus::BrowserSecondary {
+        return fit_header_segments(
+            binding_segments(&SECONDARY_BROWSER_HEADER_BINDINGS),
+            width,
+            base,
+            key,
+        );
+    }
+
+    let dirty = if app.editor.is_dirty() { " *" } else { "" };
+    fit_header_segments(
+        vec![(format!(" {}{} ", app.current_file_label(), dirty), false)],
+        width,
+        base,
+        key,
+    )
+}
+
+fn build_header_right_spans(base: Style, key: Style, cursor_label: &str) -> Vec<Span<'static>> {
+    let mut spans = build_binding_spans(&PRIMARY_HEADER_BINDINGS, base, key);
+    spans.push(Span::styled(cursor_label.to_string(), base));
+    spans
+}
+
+fn build_binding_spans(items: &[(&str, &str)], base: Style, key: Style) -> Vec<Span<'static>> {
+    binding_segments(items)
+        .into_iter()
+        .map(|(text, is_key)| Span::styled(text, if is_key { key } else { base }))
+        .collect()
+}
+
+fn binding_segments(items: &[(&str, &str)]) -> Vec<(String, bool)> {
+    let mut segments = Vec::new();
+    for (binding, label) in items {
+        segments.push(((*binding).to_string(), true));
+        segments.push(((*label).to_string(), false));
+    }
+    segments
+}
+
+fn fit_header_segments(
+    segments: Vec<(String, bool)>,
+    width: u16,
+    base: Style,
+    key: Style,
+) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut remaining = width as usize;
+
+    for (text, is_key) in segments {
+        if remaining == 0 {
+            break;
+        }
+
+        let char_count = text.chars().count();
+        if char_count <= remaining {
+            spans.push(Span::styled(text, if is_key { key } else { base }));
+            remaining -= char_count;
+        } else {
+            spans.push(Span::styled(
+                truncate(&text, remaining as u16),
+                if is_key { key } else { base },
+            ));
+            remaining = 0;
+        }
+    }
+
+    if remaining > 0 {
+        spans.push(Span::styled(" ".repeat(remaining), base));
+    }
+
+    spans
 }
 
 fn draw_menu(frame: &mut Frame, area: Rect, app: &mut App) {
@@ -755,7 +831,8 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         help_bindings_line(&[("F1", "Help"), ("F2", "Save"), ("F3", "Open selected file")]),
         help_bindings_line(&[("F4", "Cycle pane"), ("Tab", "Cycle pane"), ("Shift+Tab", "Cycle pane")]),
         help_bindings_line(&[("Ctrl+Left", "Files pane"), ("Ctrl+Right", "Editor pane"), ("F10", "Menu")]),
-        help_bindings_line(&[("F5", "Run current file"), ("F9", "Build current file"), ("Ctrl+Q", "Quit")]),
+        help_bindings_line(&[("F5", "Copy entry"), ("F6", "Move entry"), ("F7", "New sub-directory")]),
+        help_bindings_line(&[("F8", "Delete entry"), ("F9", "Build current file"), ("Ctrl+Q", "Quit")]),
         help_bindings_line(&[("Ctrl+S", "Save"), ("Ctrl+O", "Open selected file"), ("Ctrl+F", "Cycle pane")]),
         help_bindings_line(&[("Ctrl+L", "Redraw screen"), ("Ctrl+R", "Run current file"), ("Ctrl+B", "Build current file")]),
         help_bindings_line(&[("`", "Toggle second files pane")]),
@@ -828,6 +905,8 @@ fn draw_dialog(frame: &mut Frame, app: &App, dialog: Dialog, area: Rect) {
     match dialog {
         Dialog::About => draw_about_dialog(frame, area),
         Dialog::SaveFile => draw_save_file_dialog(frame, app, area),
+        Dialog::NewDirectory => draw_new_directory_dialog(frame, app, area),
+        Dialog::ConfirmFileOperation => draw_file_operation_dialog(frame, app, area),
     }
 }
 
@@ -934,6 +1013,118 @@ fn draw_save_file_dialog(frame: &mut Frame, app: &App, area: Rect) {
 
     frame.render_widget(
         Paragraph::new(text)
+            .style(Style::default().bg(CURRENT_THEME.dialog_background))
+            .alignment(Alignment::Left)
+            .wrap(Wrap { trim: true }),
+        content_area,
+    );
+}
+
+fn draw_new_directory_dialog(frame: &mut Frame, app: &App, area: Rect) {
+    let parent = app.pending_new_directory_parent().unwrap_or_default();
+    let name = app.pending_new_directory_name().unwrap_or_default();
+
+    let base = Style::default()
+        .fg(CURRENT_THEME.status_bar_fg)
+        .bg(CURRENT_THEME.dialog_background);
+    let accent = base.add_modifier(Modifier::BOLD);
+    let key = Style::default()
+        .fg(CURRENT_THEME.status_hotkey_fg)
+        .bg(CURRENT_THEME.dialog_background)
+        .add_modifier(Modifier::BOLD);
+
+    frame.render_widget(
+        Block::default().style(Style::default().bg(CURRENT_THEME.dialog_background)),
+        area,
+    );
+    let content_area = area.inner(Margin {
+        vertical: 0,
+        horizontal: 2,
+    });
+
+    let text = Text::from(vec![
+        Line::from(""),
+        Line::from(vec![Span::styled("New sub-directory", key)]),
+        Line::from(""),
+        Line::from(vec![Span::styled("Parent:", accent)]),
+        Line::from(vec![Span::styled(parent, base)]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Name:", accent),
+            Span::styled(" ", base),
+            Span::styled(name.to_string(), base),
+        ]),
+        Line::from(""),
+        Line::from(vec![Span::styled("Enter", key), Span::styled(" = Create", base)]),
+        Line::from(vec![Span::styled("Esc", key), Span::styled(" = Cancel", base)]),
+    ]);
+
+    frame.render_widget(
+        Paragraph::new(text)
+            .style(Style::default().bg(CURRENT_THEME.dialog_background))
+            .alignment(Alignment::Left)
+            .wrap(Wrap { trim: true }),
+        content_area,
+    );
+
+    let cursor_x = content_area
+        .x
+        .saturating_add("Name: ".chars().count() as u16)
+        .saturating_add(name.chars().count() as u16);
+    let cursor_y = content_area.y.saturating_add(6);
+    if cursor_x < content_area.x.saturating_add(content_area.width) && cursor_y < content_area.y.saturating_add(content_area.height) {
+        frame.set_cursor_position((cursor_x, cursor_y));
+    }
+}
+
+fn draw_file_operation_dialog(frame: &mut Frame, app: &App, area: Rect) {
+    let title = app
+        .pending_file_operation_title()
+        .unwrap_or("Confirm file operation?");
+    let (source, target) = app
+        .pending_file_operation_paths()
+        .unwrap_or_else(|| (String::new(), None));
+
+    let base = Style::default()
+        .fg(CURRENT_THEME.status_bar_fg)
+        .bg(CURRENT_THEME.dialog_background);
+    let accent = base.add_modifier(Modifier::BOLD);
+    let key = Style::default()
+        .fg(CURRENT_THEME.status_hotkey_fg)
+        .bg(CURRENT_THEME.dialog_background)
+        .add_modifier(Modifier::BOLD);
+
+    frame.render_widget(
+        Block::default().style(Style::default().bg(CURRENT_THEME.dialog_background)),
+        area,
+    );
+    let content_area = area.inner(Margin {
+        vertical: 0,
+        horizontal: 2,
+    });
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(vec![Span::styled(title, key)]),
+        Line::from(""),
+        Line::from(vec![Span::styled("Source:", accent)]),
+        Line::from(vec![Span::styled(source, base)]),
+    ];
+
+    if let Some(target) = target {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![Span::styled("Target:", accent)]));
+        lines.push(Line::from(vec![Span::styled(target, base)]));
+    }
+
+    lines.extend([
+        Line::from(""),
+        Line::from(vec![Span::styled("Y / Enter", key), Span::styled(" = Confirm", base)]),
+        Line::from(vec![Span::styled("N / ESC", key), Span::styled(" = Cancel", base)]),
+    ]);
+
+    frame.render_widget(
+        Paragraph::new(Text::from(lines))
             .style(Style::default().bg(CURRENT_THEME.dialog_background))
             .alignment(Alignment::Left)
             .wrap(Wrap { trim: true }),

@@ -92,7 +92,7 @@ fn print_usage() {
     println!("  trubo [FILE_OR_DIRECTORY]");
     println!();
     println!(
-        "Keys: F1 Help, F2 Save, F3 Open, F4 Focus, Ctrl+Left Files, Ctrl+Right Edit, F5 Run, Ctrl+Space Select, F9 Build, Ctrl+Q Quit"
+        "Keys: F1 Help, F2 Save, F3 Open, F4 Focus, F5 Copy, F6 Move, F7 New dir, F8 Delete, F9 Build, Ctrl+R Run, Ctrl+Q Quit"
     );
 }
 
@@ -205,7 +205,10 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
         }
         KeyCode::F(3) => app.open_selected_file(),
         KeyCode::F(4) => app.toggle_focus(),
-        KeyCode::F(5) => app.run_current_target(),
+        KeyCode::F(5) => app.request_copy_selected_entry(),
+        KeyCode::F(6) => app.request_move_selected_entry(),
+        KeyCode::F(7) => app.request_new_directory(),
+        KeyCode::F(8) => app.request_delete_selected_entry(),
         KeyCode::F(9) => app.build_current_target(),
         KeyCode::F(10) => app.toggle_menu(),
         KeyCode::Tab => app.toggle_focus(),

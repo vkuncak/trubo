@@ -17,7 +17,7 @@ use crate::{
     project::{ProjectEntry, ProjectEntryKind, directory_subtree_lines, list_directory},
 };
 
-pub const MENUS: [Menu; 5] = [
+pub const MENUS: [Menu; 6] = [
     Menu {
         title: "File",
         items: &[
@@ -48,9 +48,18 @@ pub const MENUS: [Menu; 5] = [
         ],
     },
     Menu {
+        title: "Files",
+        items: &[
+            MenuItem::action("Copy", "F5", MenuAction::CopyEntry),
+            MenuItem::action("Move", "F6", MenuAction::MoveEntry),
+            MenuItem::action("New directory", "F7", MenuAction::NewDirectory),
+            MenuItem::action("Delete", "F8", MenuAction::DeleteEntry),
+        ],
+    },
+    Menu {
         title: "Run",
         items: &[
-            MenuItem::action("Run", "F5", MenuAction::CargoRun),
+            MenuItem::action("Run", "Ctrl+R", MenuAction::CargoRun),
             MenuItem::action("Build", "F9", MenuAction::CargoBuild),
         ],
     },
@@ -106,6 +115,10 @@ pub enum MenuAction {
     Copy,
     Cut,
     Paste,
+    CopyEntry,
+    MoveEntry,
+    NewDirectory,
+    DeleteEntry,
     DeleteLine,
     DuplicateLine,
     CargoRun,
@@ -140,6 +153,23 @@ pub enum Focus {
 pub enum Dialog {
     About,
     SaveFile,
+    NewDirectory,
+    ConfirmFileOperation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileOperationKind {
+    Copy,
+    Move,
+    Delete,
+}
+
+#[derive(Debug, Clone)]
+struct PendingFileOperation {
+    kind: FileOperationKind,
+    source_path: PathBuf,
+    target_path: Option<PathBuf>,
+    browser_index: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -199,6 +229,9 @@ pub struct App {
     pub browser_pane_width: u16,
     pub geometry: Geometry,
     preview_label: Option<String>,
+    pending_new_directory_browser: Option<usize>,
+    new_directory_name: String,
+    pending_file_operation: Option<PendingFileOperation>,
     full_redraw_requested: bool,
     browser_preview_due_at: Option<Instant>,
     drag_target: Option<DragTarget>,
@@ -233,6 +266,9 @@ impl App {
             browser_pane_width: 30,
             geometry: Geometry::default(),
             preview_label: None,
+            pending_new_directory_browser: None,
+            new_directory_name: String::new(),
+            pending_file_operation: None,
             full_redraw_requested: false,
             browser_preview_due_at: None,
             drag_target: None,
@@ -283,11 +319,10 @@ impl App {
     pub fn toggle_secondary_browser(&mut self) {
         self.close_menu();
         if self.secondary_browser_enabled {
+            self.browsers[0] = self.browsers[1].clone();
             self.secondary_browser_enabled = false;
-            if self.focus == Focus::BrowserSecondary {
-                self.assign_focus(Focus::BrowserPrimary);
-            }
-            self.status = "Second files pane hidden".to_string();
+            self.assign_focus(Focus::BrowserPrimary);
+            self.status = format!("Files pane: {}", self.browsers[0].dir.display());
         } else {
             self.browsers[1] = self.browsers[0].clone();
             self.secondary_browser_enabled = true;
@@ -379,6 +414,34 @@ impl App {
             .path()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "Untitled".to_string())
+    }
+
+    pub fn pending_file_operation_title(&self) -> Option<&'static str> {
+        self.pending_file_operation.as_ref().map(|operation| operation.kind.title())
+    }
+
+    pub fn pending_file_operation_paths(&self) -> Option<(String, Option<String>)> {
+        let operation = self.pending_file_operation.as_ref()?;
+        Some((
+            operation.source_path.display().to_string(),
+            operation
+                .target_path
+                .as_ref()
+                .map(|path| path.display().to_string()),
+        ))
+    }
+
+    pub fn pending_new_directory_parent(&self) -> Option<String> {
+        let browser_index = self.pending_new_directory_browser?;
+        Some(self.browsers[browser_index].dir.display().to_string())
+    }
+
+    pub fn pending_new_directory_name(&self) -> Option<&str> {
+        if self.pending_new_directory_browser.is_some() {
+            Some(self.new_directory_name.as_str())
+        } else {
+            None
+        }
     }
 
     pub fn browser_label(&self, index: usize) -> String {
@@ -577,6 +640,42 @@ impl App {
                 }
                 _ => Action::None,
             },
+            Dialog::NewDirectory => match _key.code {
+                KeyCode::Enter => {
+                    self.confirm_new_directory();
+                    Action::None
+                }
+                KeyCode::Esc => {
+                    self.clear_new_directory_request();
+                    self.status = "New directory cancelled".to_string();
+                    Action::None
+                }
+                KeyCode::Backspace => {
+                    self.new_directory_name.pop();
+                    Action::None
+                }
+                KeyCode::Char(character)
+                    if !_key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !_key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    self.new_directory_name.push(character);
+                    Action::None
+                }
+                _ => Action::None,
+            },
+            Dialog::ConfirmFileOperation => match _key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                    self.confirm_pending_file_operation();
+                    Action::None
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    self.pending_file_operation = None;
+                    self.dialog = None;
+                    self.status = "File operation cancelled".to_string();
+                    Action::None
+                }
+                _ => Action::None,
+            },
         }
     }
 
@@ -700,6 +799,10 @@ impl App {
             MenuAction::Copy => self.copy_selection(),
             MenuAction::Cut => self.cut_selection(),
             MenuAction::Paste => self.paste_from_clipboard(),
+            MenuAction::CopyEntry => self.request_copy_selected_entry(),
+            MenuAction::MoveEntry => self.request_move_selected_entry(),
+            MenuAction::NewDirectory => self.request_new_directory(),
+            MenuAction::DeleteEntry => self.request_delete_selected_entry(),
             MenuAction::DeleteLine => self.editor.delete_line(),
             MenuAction::DuplicateLine => self.editor.duplicate_line(),
             MenuAction::CargoRun => self.run_current_target(),
@@ -771,6 +874,31 @@ impl App {
         } else {
             self.status = "Nothing to undo".to_string();
         }
+    }
+
+    pub fn request_copy_selected_entry(&mut self) {
+        self.request_selected_file_operation(FileOperationKind::Copy);
+    }
+
+    pub fn request_move_selected_entry(&mut self) {
+        self.request_selected_file_operation(FileOperationKind::Move);
+    }
+
+    pub fn request_delete_selected_entry(&mut self) {
+        self.request_selected_file_operation(FileOperationKind::Delete);
+    }
+
+    pub fn request_new_directory(&mut self) {
+        self.close_menu();
+        let Some(browser_index) = self.focus_browser_index() else {
+            self.status = "Activate a files pane first".to_string();
+            return;
+        };
+
+        self.pending_new_directory_browser = Some(browser_index);
+        self.new_directory_name.clear();
+        self.dialog = Some(Dialog::NewDirectory);
+        self.status = format!("New sub-directory in {}", self.browser_label(browser_index));
     }
 
     pub fn handle_mouse(&mut self, mouse: MouseEvent) -> Action {
@@ -920,6 +1048,169 @@ impl App {
         }
     }
 
+    fn request_selected_file_operation(&mut self, kind: FileOperationKind) {
+        self.close_menu();
+        let Some(browser_index) = self.focus_browser_index() else {
+            self.status = "Activate a files pane first".to_string();
+            return;
+        };
+
+        let browser = &self.browsers[browser_index];
+        let Some(entry) = browser.entries.get(browser.selected_entry) else {
+            self.status = "No file selected".to_string();
+            return;
+        };
+
+        if entry.kind == ProjectEntryKind::Parent {
+            self.status = "Parent entry cannot be used for file operations".to_string();
+            return;
+        }
+
+        let target_path = match kind {
+            FileOperationKind::Delete => None,
+            FileOperationKind::Copy | FileOperationKind::Move => {
+                if !self.secondary_browser_enabled {
+                    self.status = "Enable second files pane to choose copy/move target".to_string();
+                    return;
+                }
+
+                let target_index = 1 - browser_index;
+                let file_name = entry
+                    .path
+                    .file_name()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from(&entry.label));
+                Some(self.browsers[target_index].dir.join(file_name))
+            }
+        };
+
+        self.pending_file_operation = Some(PendingFileOperation {
+            kind,
+            source_path: entry.path.clone(),
+            target_path,
+            browser_index,
+        });
+        self.dialog = Some(Dialog::ConfirmFileOperation);
+        self.status = format!("Confirm {}", kind.label());
+    }
+
+    fn confirm_new_directory(&mut self) {
+        let Some(browser_index) = self.pending_new_directory_browser else {
+            self.dialog = None;
+            return;
+        };
+
+        let name = self.new_directory_name.trim();
+        if name.is_empty() {
+            self.status = "Directory name cannot be empty".to_string();
+            return;
+        }
+        if name == "." || name == ".." || name.chars().any(std::path::is_separator) {
+            self.status = "Directory name must be a single path component".to_string();
+            return;
+        }
+
+        let target = self.browsers[browser_index].dir.join(name);
+        if target.exists() {
+            self.status = format!("{} already exists", target.display());
+            return;
+        }
+
+        match fs::create_dir(&target) {
+            Ok(()) => {
+                self.clear_new_directory_request();
+                for index in 0..self.visible_browser_count() {
+                    self.refresh_browser_pane(index);
+                }
+                self.assign_focus(Self::focus_for_browser_index(browser_index));
+                self.select_entry_for_path(browser_index, &target);
+                self.schedule_browser_preview();
+                self.status = format!("Created {}", target.display());
+            }
+            Err(error) => {
+                self.status = format!("Create directory failed: {error}");
+            }
+        }
+    }
+
+    fn clear_new_directory_request(&mut self) {
+        self.dialog = None;
+        self.pending_new_directory_browser = None;
+        self.new_directory_name.clear();
+    }
+
+    fn confirm_pending_file_operation(&mut self) {
+        let Some(operation) = self.pending_file_operation.clone() else {
+            self.dialog = None;
+            return;
+        };
+
+        let result = match operation.kind {
+            FileOperationKind::Copy => {
+                let Some(target_path) = operation.target_path.as_ref() else {
+                    return self.finish_pending_file_operation(
+                        operation,
+                        Err(io::Error::other("copy target is missing")),
+                    );
+                };
+                if target_path.exists() {
+                    Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        format!("{} already exists", target_path.display()),
+                    ))
+                } else {
+                    copy_path(&operation.source_path, target_path)
+                }
+            }
+            FileOperationKind::Move => {
+                let Some(target_path) = operation.target_path.as_ref() else {
+                    return self.finish_pending_file_operation(
+                        operation,
+                        Err(io::Error::other("move target is missing")),
+                    );
+                };
+                if target_path.exists() {
+                    Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        format!("{} already exists", target_path.display()),
+                    ))
+                } else {
+                    move_path(&operation.source_path, target_path)
+                }
+            }
+            FileOperationKind::Delete => remove_path(&operation.source_path),
+        };
+
+        self.finish_pending_file_operation(operation, result);
+    }
+
+    fn finish_pending_file_operation(
+        &mut self,
+        operation: PendingFileOperation,
+        result: io::Result<()>,
+    ) {
+        self.dialog = None;
+        self.pending_file_operation = None;
+
+        match result {
+            Ok(()) => {
+                for browser_index in 0..self.visible_browser_count() {
+                    self.refresh_browser_pane(browser_index);
+                }
+                self.assign_focus(Self::focus_for_browser_index(operation.browser_index));
+                self.schedule_browser_preview();
+                self.status = match operation.kind {
+                    FileOperationKind::Copy => format!("Copied {}", operation.source_path.display()),
+                    FileOperationKind::Move => format!("Moved {}", operation.source_path.display()),
+                    FileOperationKind::Delete => format!("Deleted {}", operation.source_path.display()),
+                };
+            }
+            Err(error) => {
+                self.status = format!("{} failed: {error}", operation.kind.label());
+            }
+        }
+    }
+
     fn handle_editor_key(&mut self, key: KeyEvent) {
         if key.modifiers.contains(KeyModifiers::ALT) {
             match key.code {
@@ -1005,6 +1296,18 @@ impl App {
             browser.selected_entry = clamped;
             self.schedule_browser_preview();
         }
+    }
+
+    fn select_entry_for_path(&mut self, browser_index: usize, path: &Path) {
+        let Some(index) = self.browsers[browser_index]
+            .entries
+            .iter()
+            .position(|entry| entry.path == path)
+        else {
+            return;
+        };
+
+        self.browsers[browser_index].selected_entry = index;
     }
 
     fn schedule_browser_preview(&mut self) {
@@ -1165,6 +1468,61 @@ impl App {
     fn browser_area_at(&self, column: u16, row: u16) -> Option<usize> {
         (0..self.visible_browser_count())
             .find(|&index| contains(self.geometry.browser_areas[index], column, row))
+    }
+}
+
+impl FileOperationKind {
+    fn label(self) -> &'static str {
+        match self {
+            FileOperationKind::Copy => "copy",
+            FileOperationKind::Move => "move",
+            FileOperationKind::Delete => "delete",
+        }
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            FileOperationKind::Copy => "Copy selected entry?",
+            FileOperationKind::Move => "Move selected entry?",
+            FileOperationKind::Delete => "Delete selected entry?",
+        }
+    }
+}
+
+fn copy_path(source: &Path, target: &Path) -> io::Result<()> {
+    let metadata = fs::metadata(source)?;
+    if metadata.is_dir() {
+        fs::create_dir(target)?;
+        for entry in fs::read_dir(source)? {
+            let entry = entry?;
+            let child_source = entry.path();
+            let child_target = target.join(entry.file_name());
+            copy_path(&child_source, &child_target)?;
+        }
+        Ok(())
+    } else {
+        fs::copy(source, target)?;
+        Ok(())
+    }
+}
+
+fn move_path(source: &Path, target: &Path) -> io::Result<()> {
+    match fs::rename(source, target) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::CrossesDevices => {
+            copy_path(source, target)?;
+            remove_path(source)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn remove_path(path: &Path) -> io::Result<()> {
+    let metadata = fs::metadata(path)?;
+    if metadata.is_dir() {
+        fs::remove_dir_all(path)
+    } else {
+        fs::remove_file(path)
     }
 }
 
