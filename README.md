@@ -2,19 +2,28 @@
 
 Text (Rust, Unicode, Basic) Operator
 
-trubo is a retro TUI text editor written in Rust.
+trubo is a retro TUI text editor and file manager in Rust.
 
 Status: experimental nostalgia project. It edits text files, browses
 directories, and keeps the UI intentionally loud.
 
-It's based on TRUST ( https://github.com/wojtczyk/trust ) from which this was forked.
+It's originally based on TRUST ( https://github.com/wojtczyk/trust ) from which this was forked.
+
+In the meantime, it was extended step by step using guidance by Viktor Kuncak and using LLMs, primarily GPT 5.4.
+
+Hihlights:
+
+  * Name changed to "trubo"
+  * Dual pane with file operations and preview
+  * Space-saving editor-only mode
+  * Style using more colors and less boundary boxes
+  * Editor supporting undo, regex search, keyword highlighting
 
 ## Run
 
 ```sh
 cargo run -- /path/to/file-or-directory
 ```
-
 If no path is supplied, trubo opens the current directory. If a file path is
 supplied, trubo opens that file directly and uses its parent directory for the
 browser pane.
@@ -47,10 +56,14 @@ The most important keys are:
 
 For the full guide, see [doc/GUIDE.md](doc/GUIDE.md).
 
-## Notes
+## Screenshot
 
-- The README stays intentionally short to avoid drifting from the actual UI behavior.
-- If the README and the guide ever disagree, treat [doc/GUIDE.md](doc/GUIDE.md) as authoritative.
+
+![trubo screenshot](screenshot.png)
+
+
+## Notes
 
 The file pane lists directories and all regular files. trubo opens files as
 lossy text regardless of extension.
+
