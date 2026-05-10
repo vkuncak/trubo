@@ -1,0 +1,9 @@
+#!/usr/bin/env tsx
+
+type User = { name: string }; // type comment
+
+function greet(user: User): string { // function comment
+  return `hello, ${user.name}`; // return comment
+}
+
+console.log(greet({ name: "trubo" })); // call comment

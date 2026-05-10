@@ -1,0 +1,8 @@
+#!/usr/bin/env python3
+
+class Greeter:  # class comment
+    def greet(self) -> str:  # method comment
+        return "hello"  # return comment
+
+
+print(Greeter().greet())  # call comment

@@ -1,0 +1,6 @@
+#!/usr/bin/env lean
+
+def greet : String := "hello" -- value comment
+
+theorem greet_eq : greet = "hello" := by -- theorem comment
+  rfl -- proof comment

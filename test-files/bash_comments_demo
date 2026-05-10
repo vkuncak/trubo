@@ -1,0 +1,6 @@
+#!/bin/bash
+
+local_name="trubo" # trailing bash comment
+if [[ -n "$local_name" ]]; then # condition comment
+  echo "$local_name" # echo comment
+fi # end comment
