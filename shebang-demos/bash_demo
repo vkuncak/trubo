@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+
+function greet() {
+  local name="$1"
+  if [[ -z "$name" ]]; then
+    echo "missing name"
+  else
+    for item in one two three; do
+      echo "$item:$name"
+    done
+  fi
+}
+
+greet "trubo"

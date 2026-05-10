@@ -1,0 +1,20 @@
+#!/usr/bin/env tsx
+
+type User = {
+  name: string;
+  active: boolean;
+};
+
+class Greeter {
+  public constructor(private readonly user: User) {}
+
+  public greet(): string {
+    if (this.user.active) {
+      return `hello, ${this.user.name}`;
+    }
+    return "inactive";
+  }
+}
+
+const greeter = new Greeter({ name: "trubo", active: true });
+console.log(greeter.greet());

@@ -1,10 +1,8 @@
-use std::path::Path;
-
 use crate::app::{
     App, Dialog, Focus, Geometry, MENUS, MIN_BROWSER_PANE_WIDTH, MIN_EDITOR_PANE_WIDTH,
     MenuGeometry,
 };
-use crate::file_types::{DEFAULT_KEYWORDS, detect_file_type};
+use crate::file_types::{DEFAULT_KEYWORDS, FileTypeSpec, comment_start_for_line, detect_file_type};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
@@ -42,6 +40,7 @@ struct Theme {
     selected_fg: Color,
     editor_text_fg: Color,
     editor_text_bg: Color,
+    editor_comment_fg: Color,
     editor_identifier_fg: Color,
     editor_line_number_fg: Color,
     editor_line_number_bg: Color,
@@ -77,6 +76,7 @@ const CURRENT_THEME: Theme = Theme {
     selected_fg: Color::Rgb(0, 0, 0),
     editor_text_fg: Color::Rgb(0, 0, 0),
     editor_text_bg: Color::Rgb(255, 255, 255),
+    editor_comment_fg: Color::Rgb(0, 90, 0),
     editor_identifier_fg: Color::Rgb(0, 5, 0),
     editor_line_number_fg: Color::Rgb(0, 60, 0),
     editor_line_number_bg: Color::Rgb(200, 200, 200),
@@ -88,6 +88,7 @@ enum TokenKind {
     Plain,
     Identifier,
     Keyword,
+    Comment,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -538,7 +539,10 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
 
     let mut lines = Vec::with_capacity(text_rows);
     let mut wrap_marker_rows = Vec::new();
-    let keywords = keywords_for_editor(app.editor.path(), app.editor.lines().first().map(String::as_str));
+    let file_type = detect_file_type(app.editor.path(), app.editor.lines().first().map(String::as_str));
+    let keywords = file_type
+        .map(|spec| spec.keywords)
+        .unwrap_or(DEFAULT_KEYWORDS);
     let row_offset = app.editor.row_offset();
     let mut segment_offset = app.editor.row_segment_offset();
     let mut file_row = row_offset;
@@ -546,7 +550,7 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
         if let Some(line) = app.editor.lines().get(file_row) {
             let line_len = line.chars().count();
             let wrapped = wrapped_rows(line_len, text_cols);
-            let token_kinds = tokenize_line(line, keywords);
+            let token_kinds = tokenize_line(line, keywords, file_type);
             let full_width_selected = app
                 .editor
                 .selection_bounds()
@@ -995,12 +999,6 @@ fn wrapped_rows(line_len: usize, text_cols: usize) -> usize {
     line_len.max(1).div_ceil(text_cols)
 }
 
-fn keywords_for_editor(path: Option<&Path>, first_line: Option<&str>) -> &'static [&'static str] {
-    detect_file_type(path, first_line)
-        .map(|spec| spec.keywords)
-        .unwrap_or(DEFAULT_KEYWORDS)
-}
-
 fn wrap_path_lines(path: &str, width: u16) -> Vec<Line<'static>> {
     if width == 0 {
         return vec![Line::from(String::new())];
@@ -1081,16 +1079,30 @@ fn wrap_path_lines(path: &str, width: u16) -> Vec<Line<'static>> {
     }
 }
 
-fn tokenize_line(line: &str, keywords: &[&str]) -> Vec<TokenKind> {
+fn tokenize_line(
+    line: &str,
+    keywords: &[&str],
+    file_type: Option<&FileTypeSpec>,
+) -> Vec<TokenKind> {
     let chars = line.chars().collect::<Vec<_>>();
     let mut kinds = vec![TokenKind::Plain; chars.len()];
+    let comment_start = file_type.and_then(|spec| comment_start_for_line(spec, line));
+    let comment_start_idx = comment_start.map(|start| line[..start].chars().count());
+
+    if let Some(start) = comment_start_idx {
+        for token_kind in &mut kinds[start..] {
+            *token_kind = TokenKind::Comment;
+        }
+    }
+
+    let limit = comment_start_idx.unwrap_or(chars.len());
     let mut idx = 0;
 
-    while idx < chars.len() {
+    while idx < limit {
         if is_identifier_start(chars[idx]) {
             let start = idx;
             idx += 1;
-            while idx < chars.len() && is_identifier_continue(chars[idx]) {
+            while idx < limit && is_identifier_continue(chars[idx]) {
                 idx += 1;
             }
             let identifier = chars[start..idx].iter().collect::<String>();
@@ -1120,6 +1132,9 @@ fn is_identifier_continue(character: char) -> bool {
 
 fn push_editor_run(spans: &mut Vec<Span<'static>>, run: &str, style: RunStyle) {
     let mut rendered_style = match style.token {
+        TokenKind::Comment => Style::default()
+            .fg(CURRENT_THEME.editor_comment_fg)
+            .bg(CURRENT_THEME.editor_text_bg),
         TokenKind::Identifier => Style::default()
             .fg(CURRENT_THEME.editor_identifier_fg)
             .bg(CURRENT_THEME.editor_text_bg),

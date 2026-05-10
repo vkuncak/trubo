@@ -1,0 +1,20 @@
+#!/usr/bin/env python3
+
+class Greeter:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def greet(self) -> str:
+        if self.name:
+            return f"hello, {self.name}"
+        else:
+            return "missing name"
+
+
+def main() -> None:
+    for value in ["trubo", "editor"]:
+        print(Greeter(value).greet())
+
+
+if __name__ == "__main__":
+    main()

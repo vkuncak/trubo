@@ -1,0 +1,13 @@
+#!/usr/bin/env ocaml
+
+module Greeter = struct
+  let greet name =
+    if name = "" then
+      "missing name"
+    else
+      "hello, " ^ name
+end
+
+let () =
+  let names = ["trubo"; "editor"] in
+  List.iter (fun name -> print_endline (Greeter.greet name)) names
