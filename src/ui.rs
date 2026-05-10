@@ -3,6 +3,7 @@ use crate::app::{
     MenuGeometry,
 };
 use crate::file_types::{DEFAULT_KEYWORDS, FileTypeSpec, comment_start_for_line, detect_file_type};
+use std::path::Path;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
@@ -148,10 +149,15 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             Dialog::SaveFile => draw_dialog(frame, app, dialog, centered(root, 72, 10)),
             Dialog::NewDirectory => draw_dialog(frame, app, dialog, centered(root, 76, 12)),
             Dialog::RegexSearch => draw_dialog(frame, app, dialog, centered(root, 76, 12)),
-            Dialog::FileOperationName => draw_dialog(frame, app, dialog, centered(root, 76, 12)),
-            Dialog::ConfirmFileOperation => {
-                draw_dialog(frame, app, dialog, centered(root, 76, 14))
+            Dialog::FileOperationName => {
+                draw_dialog(frame, app, dialog, anchored_file_operation_area(app, root, 42, 5))
             }
+            Dialog::ConfirmFileOperation => draw_dialog(
+                frame,
+                app,
+                dialog,
+                anchored_file_operation_area(app, root, 48, confirm_file_operation_dialog_height(app)),
+            ),
         }
     }
 }
@@ -1032,8 +1038,34 @@ fn draw_save_file_dialog(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_new_directory_dialog(frame: &mut Frame, app: &App, area: Rect) {
-    let parent = app.pending_new_directory_parent().unwrap_or_default();
-    let name = app.pending_new_directory_name().unwrap_or_default();
+    draw_text_input_dialog(
+        frame,
+        area,
+        "New sub-directory",
+        Some(("Parent:", app.pending_new_directory_parent().unwrap_or_default())),
+        "Name:",
+        app.pending_new_directory_name().unwrap_or_default(),
+        app.pending_new_directory_name().unwrap_or_default().chars().count(),
+        "Create",
+    );
+}
+
+fn draw_regex_search_dialog(frame: &mut Frame, app: &App, area: Rect) {
+    draw_text_input_dialog(
+        frame,
+        area,
+        "Regular expression search",
+        None,
+        "Pattern:",
+        app.search_pattern(),
+        app.search_pattern_cursor(),
+        "Find next match",
+    );
+}
+
+fn draw_file_operation_name_dialog(frame: &mut Frame, app: &App, area: Rect) {
+    let name = app.pending_file_operation_name().unwrap_or_default();
+    let title = app.pending_file_operation_prompt_title().unwrap_or("New file name");
 
     let base = Style::default()
         .fg(CURRENT_THEME.status_bar_fg)
@@ -1044,34 +1076,20 @@ fn draw_new_directory_dialog(frame: &mut Frame, app: &App, area: Rect) {
         .bg(CURRENT_THEME.dialog_background)
         .add_modifier(Modifier::BOLD);
 
-    frame.render_widget(
-        Block::default().style(Style::default().bg(CURRENT_THEME.dialog_background)),
-        area,
-    );
-    let content_area = area.inner(Margin {
-        vertical: 0,
-        horizontal: 2,
-    });
+    let content_area = draw_compact_dialog_shell(frame, area);
 
-    let text = Text::from(vec![
-        Line::from(""),
-        Line::from(vec![Span::styled("New sub-directory", key)]),
-        Line::from(""),
-        Line::from(vec![Span::styled("Parent:", accent)]),
-        Line::from(vec![Span::styled(parent, base)]),
-        Line::from(""),
+    let lines = vec![
+        Line::from(vec![Span::styled(title.to_string(), key)]),
         Line::from(vec![
             Span::styled("Name:", accent),
             Span::styled(" ", base),
             Span::styled(name.to_string(), base),
         ]),
-        Line::from(""),
-        Line::from(vec![Span::styled("Enter", key), Span::styled(" = Create", base)]),
-        Line::from(vec![Span::styled("Esc", key), Span::styled(" = Cancel", base)]),
-    ]);
+        Line::from(vec![Span::styled("Enter", key), Span::styled(" apply  ", base), Span::styled("Esc", key), Span::styled(" cancel", base)]),
+    ];
 
     frame.render_widget(
-        Paragraph::new(text)
+        Paragraph::new(Text::from(lines))
             .style(Style::default().bg(CURRENT_THEME.dialog_background))
             .alignment(Alignment::Left)
             .wrap(Wrap { trim: true }),
@@ -1081,62 +1099,8 @@ fn draw_new_directory_dialog(frame: &mut Frame, app: &App, area: Rect) {
     let cursor_x = content_area
         .x
         .saturating_add("Name: ".chars().count() as u16)
-        .saturating_add(name.chars().count() as u16);
-    let cursor_y = content_area.y.saturating_add(6);
-    if cursor_x < content_area.x.saturating_add(content_area.width) && cursor_y < content_area.y.saturating_add(content_area.height) {
-        frame.set_cursor_position((cursor_x, cursor_y));
-    }
-}
-
-fn draw_regex_search_dialog(frame: &mut Frame, app: &App, area: Rect) {
-    let pattern = app.search_pattern();
-    let cursor_col = app.search_pattern_cursor();
-
-    let base = Style::default()
-        .fg(CURRENT_THEME.status_bar_fg)
-        .bg(CURRENT_THEME.dialog_background);
-    let accent = base.add_modifier(Modifier::BOLD);
-    let key = Style::default()
-        .fg(CURRENT_THEME.status_hotkey_fg)
-        .bg(CURRENT_THEME.dialog_background)
-        .add_modifier(Modifier::BOLD);
-
-    frame.render_widget(
-        Block::default().style(Style::default().bg(CURRENT_THEME.dialog_background)),
-        area,
-    );
-    let content_area = area.inner(Margin {
-        vertical: 0,
-        horizontal: 2,
-    });
-
-    let text = Text::from(vec![
-        Line::from(""),
-        Line::from(vec![Span::styled("Regular expression search", key)]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("Pattern:", accent),
-            Span::styled(" ", base),
-            Span::styled(pattern.to_string(), base),
-        ]),
-        Line::from(""),
-        Line::from(vec![Span::styled("Enter", key), Span::styled(" = Find next match", base)]),
-        Line::from(vec![Span::styled("Esc", key), Span::styled(" = Cancel", base)]),
-    ]);
-
-    frame.render_widget(
-        Paragraph::new(text)
-            .style(Style::default().bg(CURRENT_THEME.dialog_background))
-            .alignment(Alignment::Left)
-            .wrap(Wrap { trim: true }),
-        content_area,
-    );
-
-    let cursor_x = content_area
-        .x
-        .saturating_add("Pattern: ".chars().count() as u16)
-        .saturating_add(cursor_col as u16);
-    let cursor_y = content_area.y.saturating_add(3);
+        .saturating_add(app.pending_file_operation_name_cursor().unwrap_or(name.chars().count()) as u16);
+    let cursor_y = content_area.y.saturating_add(1);
     if cursor_x < content_area.x.saturating_add(content_area.width)
         && cursor_y < content_area.y.saturating_add(content_area.height)
     {
@@ -1144,14 +1108,16 @@ fn draw_regex_search_dialog(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-fn draw_file_operation_name_dialog(frame: &mut Frame, app: &App, area: Rect) {
-    let title = app
-        .pending_file_operation_prompt_title()
-        .unwrap_or("New file name");
-    let parent = app.pending_file_operation_parent().unwrap_or_default();
-    let name = app.pending_file_operation_name().unwrap_or_default();
-    let cursor_col = app.pending_file_operation_name_cursor().unwrap_or(name.chars().count());
-
+fn draw_text_input_dialog(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    detail: Option<(&str, String)>,
+    field_label: &str,
+    field_value: &str,
+    cursor_col: usize,
+    enter_action: &str,
+) {
     let base = Style::default()
         .fg(CURRENT_THEME.status_bar_fg)
         .bg(CURRENT_THEME.dialog_background);
@@ -1169,37 +1135,45 @@ fn draw_file_operation_name_dialog(frame: &mut Frame, app: &App, area: Rect) {
         vertical: 0,
         horizontal: 2,
     });
+    let has_detail = detail.is_some();
 
-    let text = Text::from(vec![
+    let mut lines = vec![
         Line::from(""),
-        Line::from(vec![Span::styled(title, key)]),
+        Line::from(vec![Span::styled(title.to_string(), key)]),
         Line::from(""),
-        Line::from(vec![Span::styled("Directory:", accent)]),
-        Line::from(vec![Span::styled(parent, base)]),
-        Line::from(""),
+    ];
+
+    if let Some((detail_label, detail_value)) = detail {
+        lines.push(Line::from(vec![Span::styled(detail_label.to_string(), accent)]));
+        lines.push(Line::from(vec![Span::styled(detail_value, base)]));
+        lines.push(Line::from(""));
+    }
+
+    lines.extend([
         Line::from(vec![
-            Span::styled("Name:", accent),
+            Span::styled(field_label.to_string(), accent),
             Span::styled(" ", base),
-            Span::styled(name.to_string(), base),
+            Span::styled(field_value.to_string(), base),
         ]),
         Line::from(""),
-        Line::from(vec![Span::styled("Enter", key), Span::styled(" = Apply", base)]),
+        Line::from(vec![Span::styled("Enter", key), Span::styled(format!(" = {enter_action}"), base)]),
         Line::from(vec![Span::styled("Esc", key), Span::styled(" = Cancel", base)]),
     ]);
 
     frame.render_widget(
-        Paragraph::new(text)
+        Paragraph::new(Text::from(lines))
             .style(Style::default().bg(CURRENT_THEME.dialog_background))
             .alignment(Alignment::Left)
             .wrap(Wrap { trim: true }),
         content_area,
     );
 
+    let field_row = if has_detail { 6 } else { 3 };
     let cursor_x = content_area
         .x
-        .saturating_add("Name: ".chars().count() as u16)
+        .saturating_add(format!("{field_label} ").chars().count() as u16)
         .saturating_add(cursor_col as u16);
-    let cursor_y = content_area.y.saturating_add(6);
+    let cursor_y = content_area.y.saturating_add(field_row);
     if cursor_x < content_area.x.saturating_add(content_area.width)
         && cursor_y < content_area.y.saturating_add(content_area.height)
     {
@@ -1224,34 +1198,31 @@ fn draw_file_operation_dialog(frame: &mut Frame, app: &App, area: Rect) {
         .bg(CURRENT_THEME.dialog_background)
         .add_modifier(Modifier::BOLD);
 
-    frame.render_widget(
-        Block::default().style(Style::default().bg(CURRENT_THEME.dialog_background)),
-        area,
-    );
-    let content_area = area.inner(Margin {
-        vertical: 0,
-        horizontal: 2,
-    });
+    let content_area = draw_compact_dialog_shell(frame, area);
 
-    let mut lines = vec![
-        Line::from(""),
-        Line::from(vec![Span::styled(title, key)]),
-        Line::from(""),
-        Line::from(vec![Span::styled("Source:", accent)]),
-        Line::from(vec![Span::styled(source, base)]),
-    ];
+    let source_name = file_name_for_display(&source);
+    let mut lines = vec![Line::from(vec![Span::styled(title, key)])];
 
     if let Some(target) = target {
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![Span::styled("Target:", accent)]));
-        lines.push(Line::from(vec![Span::styled(target, base)]));
+        lines.push(Line::from(vec![
+            Span::styled(source_name, accent),
+            Span::styled(" -> ", base),
+            Span::styled(truncate(&target, content_area.width.saturating_sub(4)), base),
+        ]));
+    } else {
+        lines.push(Line::from(vec![
+            Span::styled("Delete ", base),
+            Span::styled(source_name, accent),
+            Span::styled(" ?", base),
+        ]));
     }
 
-    lines.extend([
-        Line::from(""),
-        Line::from(vec![Span::styled("Y / Enter", key), Span::styled(" = Confirm", base)]),
-        Line::from(vec![Span::styled("N / ESC", key), Span::styled(" = Cancel", base)]),
-    ]);
+    lines.push(Line::from(vec![
+        Span::styled("Y/Enter", key),
+        Span::styled(" confirm  ", base),
+        Span::styled("N/Esc", key),
+        Span::styled(" cancel", base),
+    ]));
 
     frame.render_widget(
         Paragraph::new(Text::from(lines))
@@ -1260,6 +1231,96 @@ fn draw_file_operation_dialog(frame: &mut Frame, app: &App, area: Rect) {
             .wrap(Wrap { trim: true }),
         content_area,
     );
+}
+
+fn anchored_file_operation_area(app: &App, root: Rect, width: u16, height: u16) -> Rect {
+    let Some(browser_index) = app.pending_file_operation_browser_index() else {
+        return centered(root, width, height);
+    };
+
+    let list_area = app.geometry.browser_inners[browser_index];
+    let entries = app.browser_entries(browser_index);
+    if list_area.width == 0 || list_area.height == 0 || entries.is_empty() {
+        return centered(root, width, height);
+    }
+
+    let selected = app.browser_selected_entry(browser_index).min(entries.len().saturating_sub(1));
+    let height_rows = list_area.height as usize;
+    let start = selected.saturating_sub(height_rows.saturating_sub(1));
+    let row = selected.saturating_sub(start) as u16;
+    let label_width = displayed_browser_label(&entries[selected].label, entries[selected].is_directory())
+        .chars()
+        .count() as u16;
+    let anchor_x = list_area
+        .x
+        .saturating_add(label_width.min(list_area.width.saturating_sub(1)))
+        .saturating_add(1);
+    let preferred_y = list_area.y.saturating_add(row).saturating_sub(height / 2);
+
+    placed_rect_near(root, anchor_x, preferred_y, width, height)
+}
+
+fn confirm_file_operation_dialog_height(app: &App) -> u16 {
+    let has_target = app
+        .pending_file_operation_paths()
+        .and_then(|(_, target)| target)
+        .is_some();
+    if has_target { 5 } else { 5 }
+}
+
+fn draw_compact_dialog_shell(frame: &mut Frame, area: Rect) -> Rect {
+    frame.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .style(Style::default().bg(CURRENT_THEME.dialog_background))
+            .border_style(
+                Style::default()
+                    .fg(CURRENT_THEME.panel_text_muted)
+                    .bg(CURRENT_THEME.app_background),
+            ),
+        area,
+    );
+
+    area.inner(Margin {
+        vertical: 1,
+        horizontal: 1,
+    })
+}
+
+fn placed_rect_near(root: Rect, preferred_x: u16, preferred_y: u16, width: u16, height: u16) -> Rect {
+    let width = width.min(root.width.saturating_sub(2)).max(1);
+    let height = height.min(root.height.saturating_sub(1)).max(1);
+    let max_x = root.x + root.width.saturating_sub(width);
+    let max_y = root.y + root.height.saturating_sub(height);
+    let x = if preferred_x.saturating_add(width) <= root.x.saturating_add(root.width) {
+        preferred_x
+    } else {
+        preferred_x.saturating_sub(width.saturating_sub(2))
+    }
+    .clamp(root.x, max_x);
+
+    Rect {
+        x,
+        y: preferred_y.clamp(root.y, max_y),
+        width,
+        height,
+    }
+}
+
+fn displayed_browser_label(label: &str, is_directory: bool) -> String {
+    if is_directory {
+        format!("[D] {label}")
+    } else {
+        format!("    {label}")
+    }
+}
+
+fn file_name_for_display(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(path)
+        .to_string()
 }
 
 fn centered(area: Rect, width: u16, height: u16) -> Rect {

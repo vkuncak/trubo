@@ -177,6 +177,74 @@ struct PendingFileOperation {
     browser_index: usize,
 }
 
+#[derive(Debug, Clone, Default)]
+struct TextInputState {
+    text: String,
+    cursor: usize,
+}
+
+impl TextInputState {
+    fn as_str(&self) -> &str {
+        self.text.as_str()
+    }
+
+    fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    fn set_text(&mut self, text: String) {
+        self.text = text;
+        self.cursor = self.text.chars().count();
+    }
+
+    fn clear(&mut self) {
+        self.text.clear();
+        self.cursor = 0;
+    }
+
+    fn insert_char(&mut self, character: char) {
+        let byte_index = char_to_byte_index(&self.text, self.cursor);
+        self.text.insert(byte_index, character);
+        self.cursor += 1;
+    }
+
+    fn delete_left(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+
+        let remove_at = self.cursor - 1;
+        let byte_index = char_to_byte_index(&self.text, remove_at);
+        self.text.remove(byte_index);
+        self.cursor = remove_at;
+    }
+
+    fn delete_right(&mut self) {
+        if self.cursor >= self.text.chars().count() {
+            return;
+        }
+
+        let byte_index = char_to_byte_index(&self.text, self.cursor);
+        self.text.remove(byte_index);
+    }
+
+    fn move_left(&mut self) {
+        self.cursor = self.cursor.saturating_sub(1);
+    }
+
+    fn move_right(&mut self) {
+        self.cursor = (self.cursor + 1).min(self.text.chars().count());
+    }
+
+    fn move_home(&mut self) {
+        self.cursor = 0;
+    }
+
+    fn move_end(&mut self) {
+        self.cursor = self.text.chars().count();
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DragTarget {
     BrowserDivider(usize),
@@ -235,12 +303,11 @@ pub struct App {
     pub geometry: Geometry,
     preview_label: Option<String>,
     pending_new_directory_browser: Option<usize>,
-    new_directory_name: String,
+    new_directory_input: TextInputState,
     pending_file_operation: Option<PendingFileOperation>,
-    pending_file_operation_name: String,
-    pending_file_operation_name_cursor: usize,
+    pending_file_operation_name_input: TextInputState,
     search_pattern: String,
-    search_pattern_cursor: usize,
+    search_input: TextInputState,
     full_redraw_requested: bool,
     browser_preview_due_at: Option<Instant>,
     drag_target: Option<DragTarget>,
@@ -276,12 +343,11 @@ impl App {
             geometry: Geometry::default(),
             preview_label: None,
             pending_new_directory_browser: None,
-            new_directory_name: String::new(),
+            new_directory_input: TextInputState::default(),
             pending_file_operation: None,
-            pending_file_operation_name: String::new(),
-            pending_file_operation_name_cursor: 0,
+            pending_file_operation_name_input: TextInputState::default(),
             search_pattern: String::new(),
-            search_pattern_cursor: 0,
+            search_input: TextInputState::default(),
             full_redraw_requested: false,
             browser_preview_due_at: None,
             drag_target: None,
@@ -445,25 +511,24 @@ impl App {
         ))
     }
 
+    pub fn pending_file_operation_browser_index(&self) -> Option<usize> {
+        let operation = self.pending_file_operation.as_ref()?;
+        Some(operation.browser_index)
+    }
+
     pub fn pending_file_operation_prompt_title(&self) -> Option<&'static str> {
         let operation = self.pending_file_operation.as_ref()?;
         Some(operation.kind.name_prompt_title())
     }
 
-    pub fn pending_file_operation_parent(&self) -> Option<String> {
-        let operation = self.pending_file_operation.as_ref()?;
-        let parent = operation.target_path.as_deref()?.parent()?;
-        Some(parent.display().to_string())
-    }
-
     pub fn pending_file_operation_name(&self) -> Option<&str> {
         self.pending_file_operation.as_ref()?;
-        Some(self.pending_file_operation_name.as_str())
+        Some(self.pending_file_operation_name_input.as_str())
     }
 
     pub fn pending_file_operation_name_cursor(&self) -> Option<usize> {
         self.pending_file_operation.as_ref()?;
-        Some(self.pending_file_operation_name_cursor)
+        Some(self.pending_file_operation_name_input.cursor())
     }
 
     pub fn pending_new_directory_parent(&self) -> Option<String> {
@@ -473,18 +538,18 @@ impl App {
 
     pub fn pending_new_directory_name(&self) -> Option<&str> {
         if self.pending_new_directory_browser.is_some() {
-            Some(self.new_directory_name.as_str())
+            Some(self.new_directory_input.as_str())
         } else {
             None
         }
     }
 
     pub fn search_pattern(&self) -> &str {
-        self.search_pattern.as_str()
+        self.search_input.as_str()
     }
 
     pub fn search_pattern_cursor(&self) -> usize {
-        self.search_pattern_cursor
+        self.search_input.cursor()
     }
 
     pub fn browser_label(&self, index: usize) -> String {
@@ -693,18 +758,7 @@ impl App {
                     self.status = "New directory cancelled".to_string();
                     Action::None
                 }
-                KeyCode::Backspace => {
-                    self.new_directory_name.pop();
-                    Action::None
-                }
-                KeyCode::Char(character)
-                    if !_key.modifiers.contains(KeyModifiers::CONTROL)
-                        && !_key.modifiers.contains(KeyModifiers::ALT) =>
-                {
-                    self.new_directory_name.push(character);
-                    Action::None
-                }
-                _ => Action::None,
+                _ => handle_text_input_key(&mut self.new_directory_input, _key),
             },
             Dialog::RegexSearch => match _key.code {
                 KeyCode::Enter => {
@@ -716,38 +770,7 @@ impl App {
                     self.status = "Search cancelled".to_string();
                     Action::None
                 }
-                KeyCode::Backspace => {
-                    self.delete_search_pattern_left();
-                    Action::None
-                }
-                KeyCode::Delete => {
-                    self.delete_search_pattern_right();
-                    Action::None
-                }
-                KeyCode::Left => {
-                    self.move_search_pattern_cursor_left();
-                    Action::None
-                }
-                KeyCode::Right => {
-                    self.move_search_pattern_cursor_right();
-                    Action::None
-                }
-                KeyCode::Home => {
-                    self.search_pattern_cursor = 0;
-                    Action::None
-                }
-                KeyCode::End => {
-                    self.search_pattern_cursor = self.search_pattern.chars().count();
-                    Action::None
-                }
-                KeyCode::Char(character)
-                    if !_key.modifiers.contains(KeyModifiers::CONTROL)
-                        && !_key.modifiers.contains(KeyModifiers::ALT) =>
-                {
-                    self.insert_search_pattern_char(character);
-                    Action::None
-                }
-                _ => Action::None,
+                _ => handle_text_input_key(&mut self.search_input, _key),
             },
             Dialog::FileOperationName => match _key.code {
                 KeyCode::Enter => {
@@ -759,39 +782,7 @@ impl App {
                     self.status = "File operation cancelled".to_string();
                     Action::None
                 }
-                KeyCode::Backspace => {
-                    self.delete_file_operation_name_left();
-                    Action::None
-                }
-                KeyCode::Delete => {
-                    self.delete_file_operation_name_right();
-                    Action::None
-                }
-                KeyCode::Left => {
-                    self.move_file_operation_name_cursor_left();
-                    Action::None
-                }
-                KeyCode::Right => {
-                    self.move_file_operation_name_cursor_right();
-                    Action::None
-                }
-                KeyCode::Home => {
-                    self.pending_file_operation_name_cursor = 0;
-                    Action::None
-                }
-                KeyCode::End => {
-                    self.pending_file_operation_name_cursor =
-                        self.pending_file_operation_name.chars().count();
-                    Action::None
-                }
-                KeyCode::Char(character)
-                    if !_key.modifiers.contains(KeyModifiers::CONTROL)
-                        && !_key.modifiers.contains(KeyModifiers::ALT) =>
-                {
-                    self.insert_file_operation_name_char(character);
-                    Action::None
-                }
-                _ => Action::None,
+                _ => handle_text_input_key(&mut self.pending_file_operation_name_input, _key),
             },
             Dialog::ConfirmFileOperation => match _key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
@@ -1026,7 +1017,7 @@ impl App {
         };
 
         self.pending_new_directory_browser = Some(browser_index);
-        self.new_directory_name.clear();
+        self.new_directory_input.clear();
         self.dialog = Some(Dialog::NewDirectory);
         self.status = format!("New sub-directory in {}", self.browser_label(browser_index));
     }
@@ -1034,7 +1025,7 @@ impl App {
     pub fn request_regex_search(&mut self) {
         self.close_menu();
         self.assign_focus(Focus::Editor);
-        self.search_pattern_cursor = self.search_pattern.chars().count();
+        self.search_input.set_text(self.search_pattern.clone());
         self.dialog = Some(Dialog::RegexSearch);
         self.status = "Enter regular expression to search".to_string();
     }
@@ -1243,14 +1234,13 @@ impl App {
         });
 
         if self.should_prompt_for_file_operation_name() {
-            self.pending_file_operation_name = self
+            let default_name = self
                 .pending_file_operation
                 .as_ref()
                 .and_then(|operation| operation.source_path.file_name())
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            self.pending_file_operation_name_cursor =
-                self.pending_file_operation_name.chars().count();
+            self.pending_file_operation_name_input.set_text(default_name);
             self.dialog = Some(Dialog::FileOperationName);
             self.status = format!("Choose new name for {}", kind.label());
             return;
@@ -1266,7 +1256,7 @@ impl App {
             return;
         };
 
-        let name = self.new_directory_name.trim();
+        let name = self.new_directory_input.as_str().trim();
         if name.is_empty() {
             self.status = "Directory name cannot be empty".to_string();
             return;
@@ -1302,16 +1292,17 @@ impl App {
     fn clear_new_directory_request(&mut self) {
         self.dialog = None;
         self.pending_new_directory_browser = None;
-        self.new_directory_name.clear();
+        self.new_directory_input.clear();
     }
 
     fn confirm_regex_search(&mut self) {
-        if self.search_pattern.is_empty() {
+        if self.search_input.as_str().is_empty() {
             self.status = "Search pattern cannot be empty".to_string();
             return;
         }
 
-        let regex = match Regex::new(&self.search_pattern) {
+        let pattern = self.search_input.as_str().to_string();
+        let regex = match Regex::new(&pattern) {
             Ok(regex) => regex,
             Err(error) => {
                 self.status = format!("Invalid regex: {error}");
@@ -1325,51 +1316,17 @@ impl App {
             self.editor.cursor_col(),
             &regex,
         ) else {
-            self.status = format!("No match for /{}/", self.search_pattern);
+            self.status = format!("No match for /{pattern}/");
             return;
         };
 
         self.dialog = None;
         self.assign_focus(Focus::Editor);
+        self.search_pattern = pattern.clone();
         self.editor.set_cursor(row, start_col);
         self.editor.begin_selection();
         self.editor.select_to(row, end_col);
-        self.status = format!("Found /{}/ at {}:{}", self.search_pattern, row + 1, start_col + 1);
-    }
-
-    fn insert_search_pattern_char(&mut self, character: char) {
-        let byte_index = char_to_byte_index(&self.search_pattern, self.search_pattern_cursor);
-        self.search_pattern.insert(byte_index, character);
-        self.search_pattern_cursor += 1;
-    }
-
-    fn delete_search_pattern_left(&mut self) {
-        if self.search_pattern_cursor == 0 {
-            return;
-        }
-
-        let remove_at = self.search_pattern_cursor - 1;
-        let byte_index = char_to_byte_index(&self.search_pattern, remove_at);
-        self.search_pattern.remove(byte_index);
-        self.search_pattern_cursor = remove_at;
-    }
-
-    fn delete_search_pattern_right(&mut self) {
-        if self.search_pattern_cursor >= self.search_pattern.chars().count() {
-            return;
-        }
-
-        let byte_index = char_to_byte_index(&self.search_pattern, self.search_pattern_cursor);
-        self.search_pattern.remove(byte_index);
-    }
-
-    fn move_search_pattern_cursor_left(&mut self) {
-        self.search_pattern_cursor = self.search_pattern_cursor.saturating_sub(1);
-    }
-
-    fn move_search_pattern_cursor_right(&mut self) {
-        let len = self.search_pattern.chars().count();
-        self.search_pattern_cursor = (self.search_pattern_cursor + 1).min(len);
+        self.status = format!("Found /{pattern}/ at {}:{}", row + 1, start_col + 1);
     }
 
     fn should_prompt_for_file_operation_name(&self) -> bool {
@@ -1387,7 +1344,7 @@ impl App {
             return;
         };
 
-        let name = self.pending_file_operation_name.trim();
+        let name = self.pending_file_operation_name_input.as_str().trim();
         if name.is_empty() {
             self.status = "File name cannot be empty".to_string();
             return;
@@ -1413,53 +1370,9 @@ impl App {
     fn clear_file_operation_request(&mut self) {
         self.dialog = None;
         self.pending_file_operation = None;
-        self.pending_file_operation_name.clear();
-        self.pending_file_operation_name_cursor = 0;
+        self.pending_file_operation_name_input.clear();
     }
 
-    fn insert_file_operation_name_char(&mut self, character: char) {
-        let byte_index = char_to_byte_index(
-            &self.pending_file_operation_name,
-            self.pending_file_operation_name_cursor,
-        );
-        self.pending_file_operation_name.insert(byte_index, character);
-        self.pending_file_operation_name_cursor += 1;
-    }
-
-    fn delete_file_operation_name_left(&mut self) {
-        if self.pending_file_operation_name_cursor == 0 {
-            return;
-        }
-
-        let remove_at = self.pending_file_operation_name_cursor - 1;
-        let byte_index = char_to_byte_index(&self.pending_file_operation_name, remove_at);
-        self.pending_file_operation_name.remove(byte_index);
-        self.pending_file_operation_name_cursor = remove_at;
-    }
-
-    fn delete_file_operation_name_right(&mut self) {
-        if self.pending_file_operation_name_cursor >= self.pending_file_operation_name.chars().count()
-        {
-            return;
-        }
-
-        let byte_index = char_to_byte_index(
-            &self.pending_file_operation_name,
-            self.pending_file_operation_name_cursor,
-        );
-        self.pending_file_operation_name.remove(byte_index);
-    }
-
-    fn move_file_operation_name_cursor_left(&mut self) {
-        self.pending_file_operation_name_cursor =
-            self.pending_file_operation_name_cursor.saturating_sub(1);
-    }
-
-    fn move_file_operation_name_cursor_right(&mut self) {
-        let len = self.pending_file_operation_name.chars().count();
-        self.pending_file_operation_name_cursor =
-            (self.pending_file_operation_name_cursor + 1).min(len);
-    }
 
     fn confirm_pending_file_operation(&mut self) {
         let Some(operation) = self.pending_file_operation.clone() else {
@@ -1896,6 +1809,25 @@ fn char_to_byte_index(value: &str, char_index: usize) -> usize {
         .nth(char_index)
         .map(|(byte_index, _)| byte_index)
         .unwrap_or(value.len())
+}
+
+fn handle_text_input_key(input: &mut TextInputState, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Backspace => input.delete_left(),
+        KeyCode::Delete => input.delete_right(),
+        KeyCode::Left => input.move_left(),
+        KeyCode::Right => input.move_right(),
+        KeyCode::Home => input.move_home(),
+        KeyCode::End => input.move_end(),
+        KeyCode::Char(character)
+            if !key.modifiers.contains(KeyModifiers::CONTROL)
+                && !key.modifiers.contains(KeyModifiers::ALT) =>
+        {
+            input.insert_char(character);
+        }
+        _ => {}
+    }
+    Action::None
 }
 
 fn byte_to_char_index(value: &str, byte_index: usize) -> usize {
