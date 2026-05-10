@@ -91,9 +91,18 @@ fn print_usage() {
     println!("Usage:");
     println!("  trubo [FILE_OR_DIRECTORY]");
     println!();
-    println!(
-        "Keys: F1 Help, F2 Save, F3 Open, F4 Focus, F5 Copy, F6 Move, F7 New dir, F8 Delete, F9 Build, Ctrl+B Editor only, Ctrl+Y Redo, Ctrl+R Run, Ctrl+Q Quit"
-    );
+    println!("Start with a directory to browse, or a file to open it directly.");
+    println!();
+    println!("Important keys:");
+    println!("  F1       Help");
+    println!("  Ctrl+Q   Quit trubo");
+    println!("  Ctrl+B   Toggle editor-only mode");
+    println!("  `        Toggle dual-pane mode from a files pane");
+    println!("  F4/Tab   Cycle focus between panes");
+    println!();
+    println!("Documentation:");
+    println!("  doc/GUIDE.md          User guide and workflows");
+    println!("  doc/ARCHITECTURE.md   Codebase architecture");
 }
 
 fn setup_terminal() -> io::Result<TerminalUi> {

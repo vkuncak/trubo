@@ -93,12 +93,13 @@ const SECONDARY_BROWSER_HEADER_BINDINGS: [(&str, &str); 4] = [
     ("F7", " MkDir  "),
     ("F8", " Delete "),
 ];
-const PRIMARY_HEADER_BINDINGS: [(&str, &str); 5] = [
+const PRIMARY_HEADER_BINDINGS: [(&str, &str); 6] = [
     ("F1", " Help  "),
     ("Ctrl-B", " Side  "),
     ("`", " Dual "),
     ("F4", " Pane  "),
-    ("F10", " Menu"),
+    ("F10", " Menu  "),
+    ("Ctrl-Q", " Quit"),
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -853,6 +854,11 @@ fn draw_help(frame: &mut Frame, area: Rect) {
             "trubo keys",
             Style::default().add_modifier(Modifier::BOLD),
         )]),
+        Line::from(""),
+        Line::from("Exit trubo with Ctrl+Q."),
+        Line::from("Ctrl+B switches to editor-only mode."),
+        Line::from("Use ` in a files pane to toggle dual-pane mode."),
+        Line::from("See doc/GUIDE.md for the full guide."),
         Line::from(""),
         help_bindings_line(&[("F1", "Help"), ("F2", "Save"), ("F3", "Open selected file")]),
         help_bindings_line(&[("F4", "Cycle pane"), ("Tab", "Cycle pane"), ("Shift+Tab", "Cycle pane")]),
