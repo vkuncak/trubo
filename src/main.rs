@@ -51,7 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if target.is_file() {
         app.open_path(target);
     } else {
-        app.status = format!("Browsing {}", app.browser_label());
+        app.status = format!("Browsing {}", app.browser_label(0));
     }
 
     let result = run(&mut terminal, &mut app);

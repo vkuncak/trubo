@@ -14,7 +14,7 @@ use ratatui::layout::Rect;
 use crate::{
     editor::Editor,
     file_types::{ToolInvocation, detect_file_type},
-    project::{ProjectEntry, directory_subtree_lines, list_directory},
+    project::{ProjectEntry, ProjectEntryKind, directory_subtree_lines, list_directory},
 };
 
 pub const MENUS: [Menu; 5] = [
@@ -131,7 +131,8 @@ pub enum Action {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
-    Browser,
+    BrowserPrimary,
+    BrowserSecondary,
     Editor,
 }
 
@@ -143,7 +144,7 @@ pub enum Dialog {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DragTarget {
-    BrowserDivider,
+    BrowserDivider(usize),
     EditorSelection,
 }
 
@@ -153,22 +154,39 @@ pub struct Geometry {
     pub menu_area: Rect,
     pub menu: MenuGeometry,
     pub desktop_inner: Rect,
-    pub browser_area: Rect,
-    pub browser_inner: Rect,
+    pub browser_areas: [Rect; 2],
+    pub browser_inners: [Rect; 2],
     pub editor_area: Rect,
     pub editor_inner: Rect,
 }
 
 pub const MIN_BROWSER_PANE_WIDTH: u16 = 18;
 pub const MIN_EDITOR_PANE_WIDTH: u16 = 24;
+const BROWSER_PANE_COUNT: usize = 2;
 const BROWSER_PREVIEW_DELAY: Duration = Duration::from_millis(200);
 const DIRECTORY_PREVIEW_MAX_ENTRIES: usize = 256;
 
-#[derive(Debug)]
-pub struct App {
-    pub browser_dir: PathBuf,
+#[derive(Debug, Clone)]
+pub struct BrowserPane {
+    pub dir: PathBuf,
     pub entries: Vec<ProjectEntry>,
     pub selected_entry: usize,
+}
+
+impl BrowserPane {
+    fn new(dir: PathBuf) -> Self {
+        Self {
+            dir,
+            entries: Vec::new(),
+            selected_entry: 0,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct App {
+    pub browsers: [BrowserPane; BROWSER_PANE_COUNT],
+    pub secondary_browser_enabled: bool,
     pub editor: Editor,
     pub focus: Focus,
     pub menu_open: bool,
@@ -198,11 +216,13 @@ impl App {
         };
 
         Self {
-            browser_dir,
-            entries: Vec::new(),
-            selected_entry: 0,
+            browsers: [
+                BrowserPane::new(browser_dir.clone()),
+                BrowserPane::new(browser_dir),
+            ],
+            secondary_browser_enabled: false,
             editor: Editor::scratch(),
-            focus: Focus::Browser,
+            focus: Focus::BrowserPrimary,
             menu_open: false,
             active_menu: 0,
             active_menu_item: first_selectable_item(0),
@@ -220,28 +240,27 @@ impl App {
     }
 
     pub fn refresh_browser(&mut self) {
-        self.entries = list_directory(&self.browser_dir);
-        if self.selected_entry >= self.entries.len() {
-            self.selected_entry = self.entries.len().saturating_sub(1);
-        }
+        self.refresh_browser_pane(0);
         self.schedule_browser_preview();
     }
 
     pub fn toggle_focus(&mut self) {
         self.close_menu();
         let focus = match self.focus {
-            Focus::Browser => Focus::Editor,
-            Focus::Editor => Focus::Browser,
+            Focus::BrowserPrimary if self.secondary_browser_enabled => Focus::BrowserSecondary,
+            Focus::BrowserPrimary => Focus::Editor,
+            Focus::BrowserSecondary => Focus::BrowserPrimary,
+            Focus::Editor => Focus::BrowserPrimary,
         };
         self.assign_focus(focus);
-        if self.focus == Focus::Browser {
+        if self.focus_browser_index().is_some() {
             self.schedule_browser_preview();
         }
         self.status = format!("Focus: {}", self.focus_name());
     }
 
     pub fn focus_browser(&mut self) {
-        self.set_focus(Focus::Browser);
+        self.set_focus(Focus::BrowserPrimary);
     }
 
     pub fn focus_editor(&mut self) {
@@ -251,7 +270,7 @@ impl App {
     fn set_focus(&mut self, focus: Focus) {
         self.close_menu();
         self.assign_focus(focus);
-        if self.focus == Focus::Browser {
+        if self.focus_browser_index().is_some() {
             self.schedule_browser_preview();
         }
         self.status = format!("Focus: {}", self.focus_name());
@@ -259,6 +278,23 @@ impl App {
 
     fn assign_focus(&mut self, focus: Focus) {
         self.focus = focus;
+    }
+
+    pub fn toggle_secondary_browser(&mut self) {
+        self.close_menu();
+        if self.secondary_browser_enabled {
+            self.secondary_browser_enabled = false;
+            if self.focus == Focus::BrowserSecondary {
+                self.assign_focus(Focus::BrowserPrimary);
+            }
+            self.status = "Second files pane hidden".to_string();
+        } else {
+            self.browsers[1] = self.browsers[0].clone();
+            self.secondary_browser_enabled = true;
+            self.assign_focus(Focus::BrowserSecondary);
+            self.status = format!("Second files pane: {}", self.browsers[1].dir.display());
+        }
+        self.schedule_browser_preview();
     }
 
     pub fn request_full_redraw(&mut self) {
@@ -274,8 +310,11 @@ impl App {
             return;
         };
 
+        let Some(browser_index) = self.focus_browser_index() else {
+            return;
+        };
+
         if Instant::now() < due
-            || self.focus != Focus::Browser
             || self.menu_open
             || self.help_open
             || self.dialog.is_some()
@@ -286,11 +325,12 @@ impl App {
 
         self.browser_preview_due_at = None;
 
-        let Some(entry) = self.entries.get(self.selected_entry) else {
+        let browser = &self.browsers[browser_index];
+        let Some(entry) = browser.entries.get(browser.selected_entry) else {
             return;
         };
 
-        if entry.kind == crate::project::ProjectEntryKind::Directory {
+        if entry.kind == ProjectEntryKind::Directory {
             let preview_label = format!("{} [tree]", entry.path.display());
             if self.preview_label.as_deref() == Some(preview_label.as_str()) {
                 return;
@@ -324,7 +364,8 @@ impl App {
 
     pub fn focus_name(&self) -> &'static str {
         match self.focus {
-            Focus::Browser => "Files",
+            Focus::BrowserPrimary => "Files 1",
+            Focus::BrowserSecondary => "Files 2",
             Focus::Editor => "Edit",
         }
     }
@@ -340,23 +381,32 @@ impl App {
             .unwrap_or_else(|| "Untitled".to_string())
     }
 
-    pub fn browser_label(&self) -> String {
-        self.browser_dir.display().to_string()
+    pub fn browser_label(&self, index: usize) -> String {
+        self.browsers[index].dir.display().to_string()
     }
 
     pub fn open_selected_file(&mut self) {
         self.close_menu();
-        let Some(entry) = self.entries.get(self.selected_entry) else {
+        let Some(browser_index) = self.focus_browser_index() else {
+            self.status = "Files pane is not active".to_string();
+            return;
+        };
+
+        let Some(entry) = self.browsers[browser_index]
+            .entries
+            .get(self.browsers[browser_index].selected_entry)
+            .cloned()
+        else {
             self.status = "No files in this directory".to_string();
             return;
         };
 
         if entry.is_directory() {
-            self.navigate_to_dir(entry.path.clone());
+            self.navigate_to_dir(browser_index, entry.path);
             return;
         }
 
-        self.open_path(entry.path.clone());
+        self.open_path(entry.path);
     }
 
     pub fn open_path(&mut self, path: PathBuf) {
@@ -371,13 +421,14 @@ impl App {
         }
     }
 
-    fn navigate_to_dir(&mut self, path: PathBuf) {
+    fn navigate_to_dir(&mut self, browser_index: usize, path: PathBuf) {
         let path = path.canonicalize().unwrap_or(path);
-        self.browser_dir = path;
-        self.selected_entry = 0;
-        self.refresh_browser();
-        self.assign_focus(Focus::Browser);
-        self.status = format!("Browsing {}", self.browser_label());
+        let browser = &mut self.browsers[browser_index];
+        browser.dir = path;
+        browser.selected_entry = 0;
+        self.refresh_browser_pane(browser_index);
+        self.assign_focus(Self::focus_for_browser_index(browser_index));
+        self.status = format!("Browsing {}", self.browser_label(browser_index));
     }
 
     pub fn save_current(&mut self) -> bool {
@@ -414,7 +465,7 @@ impl App {
             return;
         };
 
-        let cwd = path.parent().unwrap_or(self.browser_dir.as_path());
+        let cwd = path.parent().unwrap_or(self.browsers[0].dir.as_path());
 
         let Some(spec) = detect_file_type(Some(path), self.editor.lines().first().map(String::as_str)) else {
             let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or_default();
@@ -455,7 +506,7 @@ impl App {
             return;
         };
 
-        let cwd = path.parent().unwrap_or(self.browser_dir.as_path());
+        let cwd = path.parent().unwrap_or(self.browsers[0].dir.as_path());
 
         let Some(spec) = detect_file_type(Some(path), self.editor.lines().first().map(String::as_str)) else {
             let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or_default();
@@ -495,7 +546,7 @@ impl App {
         }
 
         match self.focus {
-            Focus::Browser => self.handle_browser_key(key),
+            Focus::BrowserPrimary | Focus::BrowserSecondary => self.handle_browser_key(key),
             Focus::Editor => self.handle_editor_key(key),
         }
     }
@@ -654,7 +705,7 @@ impl App {
             MenuAction::CargoRun => self.run_current_target(),
             MenuAction::CargoBuild => self.build_current_target(),
             MenuAction::ToggleFocus => self.toggle_focus(),
-            MenuAction::FocusBrowser => self.set_focus(Focus::Browser),
+            MenuAction::FocusBrowser => self.set_focus(Focus::BrowserPrimary),
             MenuAction::FocusEditor => self.set_focus(Focus::Editor),
             MenuAction::Help => self.help_open = true,
             MenuAction::About => self.dialog = Some(Dialog::About),
@@ -778,22 +829,22 @@ impl App {
             self.close_menu();
         }
 
-        if self.is_browser_divider(column, row) {
-            self.drag_target = Some(DragTarget::BrowserDivider);
-            self.resize_browser_pane(column);
+        if let Some(divider_index) = self.browser_divider_at(column, row) {
+            self.drag_target = Some(DragTarget::BrowserDivider(divider_index));
+            self.resize_browser_pane(divider_index, column);
             return Action::None;
         }
 
-        if contains(self.geometry.browser_inner, column, row) {
-            self.assign_focus(Focus::Browser);
-            self.select_entry_at(row);
+        if let Some(browser_index) = self.browser_inner_at(column, row) {
+            self.assign_focus(Self::focus_for_browser_index(browser_index));
+            self.select_entry_at(browser_index, row);
         } else if contains(self.geometry.editor_inner, column, row) {
             self.assign_focus(Focus::Editor);
             self.place_cursor_at(column, row, false);
             self.drag_target = Some(DragTarget::EditorSelection);
-        } else if contains(self.geometry.browser_area, column, row) {
-            self.assign_focus(Focus::Browser);
-            self.status = "Focus: Files".to_string();
+        } else if let Some(browser_index) = self.browser_area_at(column, row) {
+            self.assign_focus(Self::focus_for_browser_index(browser_index));
+            self.status = format!("Focus: {}", self.focus_name());
         } else if contains(self.geometry.editor_area, column, row) {
             self.assign_focus(Focus::Editor);
             self.status = "Focus: Edit".to_string();
@@ -804,7 +855,9 @@ impl App {
 
     fn handle_mouse_drag(&mut self, column: u16, row: u16) {
         match self.drag_target {
-            Some(DragTarget::BrowserDivider) => self.resize_browser_pane(column),
+            Some(DragTarget::BrowserDivider(divider_index)) => {
+                self.resize_browser_pane(divider_index, column)
+            }
             Some(DragTarget::EditorSelection) => self.place_cursor_at(column, row, true),
             None => {}
         }
@@ -815,15 +868,15 @@ impl App {
             return;
         }
 
-        if contains(self.geometry.browser_inner, column, row) {
-            self.assign_focus(Focus::Browser);
+        if let Some(browser_index) = self.browser_inner_at(column, row) {
+            self.assign_focus(Self::focus_for_browser_index(browser_index));
             if amount < 0 {
                 for _ in 0..amount.unsigned_abs() {
-                    self.select_previous_entry();
+                    self.select_previous_entry(browser_index);
                 }
             } else {
                 for _ in 0..amount as usize {
-                    self.select_next_entry();
+                    self.select_next_entry(browser_index);
                 }
             }
         } else if contains(self.geometry.editor_inner, column, row) {
@@ -837,23 +890,30 @@ impl App {
     }
 
     fn handle_browser_key(&mut self, key: KeyEvent) {
+        let Some(browser_index) = self.focus_browser_index() else {
+            return;
+        };
+
         match key.code {
-            KeyCode::Up => self.select_previous_entry(),
-            KeyCode::Down => self.select_next_entry(),
-            KeyCode::PageUp => self.page_up_browser(),
-            KeyCode::PageDown => self.page_down_browser(),
-            KeyCode::Home => self.set_selected_entry(0),
+            KeyCode::Char('`') => self.toggle_secondary_browser(),
+            KeyCode::Up => self.select_previous_entry(browser_index),
+            KeyCode::Down => self.select_next_entry(browser_index),
+            KeyCode::PageUp => self.page_up_browser(browser_index),
+            KeyCode::PageDown => self.page_down_browser(browser_index),
+            KeyCode::Home => self.set_selected_entry(browser_index, 0),
             KeyCode::End => {
-                self.set_selected_entry(self.entries.len().saturating_sub(1));
+                let last = self.browsers[browser_index].entries.len().saturating_sub(1);
+                self.set_selected_entry(browser_index, last);
             }
             KeyCode::Enter => self.open_selected_file(),
             KeyCode::Backspace => {
-                if let Some(parent) = self.browser_dir.parent() {
-                    self.navigate_to_dir(parent.to_path_buf());
+                let parent = self.browsers[browser_index].dir.parent().map(Path::to_path_buf);
+                if let Some(parent) = parent {
+                    self.navigate_to_dir(browser_index, parent);
                 }
             }
             KeyCode::Char('r') | KeyCode::Char('R') => {
-                self.refresh_browser();
+                self.refresh_browser_pane(browser_index);
                 self.status = "Directory refreshed".to_string();
             }
             _ => {}
@@ -900,38 +960,49 @@ impl App {
         }
     }
 
-    fn select_previous_entry(&mut self) {
-        self.set_selected_entry(self.selected_entry.saturating_sub(1));
+    fn select_previous_entry(&mut self, browser_index: usize) {
+        let selected = self.browsers[browser_index].selected_entry;
+        self.set_selected_entry(browser_index, selected.saturating_sub(1));
     }
 
-    fn select_next_entry(&mut self) {
-        if !self.entries.is_empty() {
-            self.set_selected_entry((self.selected_entry + 1).min(self.entries.len() - 1));
+    fn select_next_entry(&mut self, browser_index: usize) {
+        let browser = &self.browsers[browser_index];
+        if !browser.entries.is_empty() {
+            self.set_selected_entry(
+                browser_index,
+                (browser.selected_entry + 1).min(browser.entries.len() - 1),
+            );
         }
     }
 
-    fn page_up_browser(&mut self) {
-        let page_size = self.browser_page_size();
-        self.set_selected_entry(self.selected_entry.saturating_sub(page_size));
+    fn page_up_browser(&mut self, browser_index: usize) {
+        let page_size = self.browser_page_size(browser_index);
+        let selected = self.browsers[browser_index].selected_entry;
+        self.set_selected_entry(browser_index, selected.saturating_sub(page_size));
     }
 
-    fn page_down_browser(&mut self) {
-        if self.entries.is_empty() {
+    fn page_down_browser(&mut self, browser_index: usize) {
+        if self.browsers[browser_index].entries.is_empty() {
             return;
         }
 
-        let page_size = self.browser_page_size();
-        self.set_selected_entry((self.selected_entry + page_size).min(self.entries.len() - 1));
+        let page_size = self.browser_page_size(browser_index);
+        let browser = &self.browsers[browser_index];
+        self.set_selected_entry(
+            browser_index,
+            (browser.selected_entry + page_size).min(browser.entries.len() - 1),
+        );
     }
 
-    fn browser_page_size(&self) -> usize {
-        (self.geometry.browser_inner.height as usize).max(1)
+    fn browser_page_size(&self, browser_index: usize) -> usize {
+        (self.geometry.browser_inners[browser_index].height as usize).max(1)
     }
 
-    fn set_selected_entry(&mut self, index: usize) {
-        let clamped = index.min(self.entries.len().saturating_sub(1));
-        if clamped != self.selected_entry {
-            self.selected_entry = clamped;
+    fn set_selected_entry(&mut self, browser_index: usize, index: usize) {
+        let browser = &mut self.browsers[browser_index];
+        let clamped = index.min(browser.entries.len().saturating_sub(1));
+        if clamped != browser.selected_entry {
+            browser.selected_entry = clamped;
             self.schedule_browser_preview();
         }
     }
@@ -940,21 +1011,23 @@ impl App {
         self.browser_preview_due_at = Some(Instant::now() + BROWSER_PREVIEW_DELAY);
     }
 
-    fn select_entry_at(&mut self, row: u16) {
-        if self.entries.is_empty() {
+    fn select_entry_at(&mut self, browser_index: usize, row: u16) {
+        let browser = &self.browsers[browser_index];
+        if browser.entries.is_empty() {
             return;
         }
 
-        let visible_rows = self.geometry.browser_inner.height as usize;
-        let start = self
+        let visible_rows = self.geometry.browser_inners[browser_index].height as usize;
+        let start = browser
             .selected_entry
             .saturating_sub(visible_rows.saturating_sub(1));
-        let clicked = start + row.saturating_sub(self.geometry.browser_inner.y) as usize;
+        let clicked = start + row.saturating_sub(self.geometry.browser_inners[browser_index].y) as usize;
 
-        if clicked < self.entries.len() {
-            let label = self.entries[clicked].label.clone();
-            self.set_selected_entry(clicked);
+        if clicked < browser.entries.len() {
+            let label = browser.entries[clicked].label.clone();
+            self.set_selected_entry(browser_index, clicked);
             self.status = format!("Selected {label}");
+            self.assign_focus(Self::focus_for_browser_index(browser_index));
             self.open_selected_file();
         }
     }
@@ -1007,35 +1080,91 @@ impl App {
         (self.editor.lines().len().max(1).to_string().len().max(3) + 1) as u16
     }
 
-    fn is_browser_divider(&self, column: u16, row: u16) -> bool {
-        if !contains_y(self.geometry.browser_area, row) {
-            return false;
+    fn browser_divider_at(&self, column: u16, row: u16) -> Option<usize> {
+        for browser_index in 0..self.visible_browser_count() {
+            if !contains_y(self.geometry.browser_areas[browser_index], row) {
+                continue;
+            }
+
+            let right_edge = self.geometry.browser_areas[browser_index]
+                .x
+                .saturating_add(self.geometry.browser_areas[browser_index].width.saturating_sub(1));
+            if column == right_edge || column == right_edge.saturating_add(1) {
+                return Some(browser_index);
+            }
         }
 
-        let right_edge = self
-            .geometry
-            .browser_area
-            .x
-            .saturating_add(self.geometry.browser_area.width.saturating_sub(1));
-
-        column == right_edge || column == right_edge.saturating_add(1)
+        None
     }
 
-    fn resize_browser_pane(&mut self, column: u16) {
+    fn resize_browser_pane(&mut self, divider_index: usize, column: u16) {
         let desktop = self.geometry.desktop_inner;
         if desktop.width == 0 {
             return;
         }
 
-        let max_width = desktop.width.saturating_sub(MIN_EDITOR_PANE_WIDTH).max(1);
+        let visible_browsers = self.visible_browser_count() as u16;
+        let max_width = desktop
+            .width
+            .saturating_sub(MIN_EDITOR_PANE_WIDTH)
+            .checked_div(visible_browsers)
+            .unwrap_or(1)
+            .max(1);
         let min_width = MIN_BROWSER_PANE_WIDTH.min(max_width);
-        let width = column
-            .saturating_sub(desktop.x)
-            .saturating_add(1)
-            .clamp(min_width, max_width);
+        let relative = column.saturating_sub(desktop.x).saturating_add(1);
+        let width = if self.secondary_browser_enabled && divider_index == 1 {
+            (relative / 2).clamp(min_width, max_width)
+        } else {
+            relative.clamp(min_width, max_width)
+        };
 
         self.browser_pane_width = width;
         self.status = format!("Files pane: {width} columns");
+    }
+
+    pub fn visible_browser_count(&self) -> usize {
+        if self.secondary_browser_enabled { 2 } else { 1 }
+    }
+
+    pub fn browser_entries(&self, browser_index: usize) -> &[ProjectEntry] {
+        &self.browsers[browser_index].entries
+    }
+
+    pub fn browser_selected_entry(&self, browser_index: usize) -> usize {
+        self.browsers[browser_index].selected_entry
+    }
+
+    fn refresh_browser_pane(&mut self, browser_index: usize) {
+        let browser = &mut self.browsers[browser_index];
+        browser.entries = list_directory(&browser.dir);
+        if browser.selected_entry >= browser.entries.len() {
+            browser.selected_entry = browser.entries.len().saturating_sub(1);
+        }
+    }
+
+    fn focus_browser_index(&self) -> Option<usize> {
+        match self.focus {
+            Focus::BrowserPrimary => Some(0),
+            Focus::BrowserSecondary if self.secondary_browser_enabled => Some(1),
+            Focus::BrowserSecondary | Focus::Editor => None,
+        }
+    }
+
+    fn focus_for_browser_index(browser_index: usize) -> Focus {
+        match browser_index {
+            0 => Focus::BrowserPrimary,
+            _ => Focus::BrowserSecondary,
+        }
+    }
+
+    fn browser_inner_at(&self, column: u16, row: u16) -> Option<usize> {
+        (0..self.visible_browser_count())
+            .find(|&index| contains(self.geometry.browser_inners[index], column, row))
+    }
+
+    fn browser_area_at(&self, column: u16, row: u16) -> Option<usize> {
+        (0..self.visible_browser_count())
+            .find(|&index| contains(self.geometry.browser_areas[index], column, row))
     }
 }
 

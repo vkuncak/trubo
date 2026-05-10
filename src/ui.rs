@@ -83,6 +83,8 @@ const CURRENT_THEME: Theme = Theme {
     editor_selection_bg: Color::Rgb(180, 240, 240),
 };
 
+const SECONDARY_BROWSER_GUTTER_WIDTH: u16 = 1;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TokenKind {
     Plain,
@@ -351,36 +353,77 @@ fn draw_desktop(frame: &mut Frame, area: Rect, app: &mut App) {
         horizontal: 0,
         vertical: 0,
     });
-    app.browser_pane_width = clamp_browser_width(desktop.width, app.browser_pane_width);
+    app.browser_pane_width = clamp_browser_width(
+        desktop.width,
+        app.browser_pane_width,
+        app.visible_browser_count() as u16,
+    );
     app.geometry.desktop_inner = desktop;
+    app.geometry.browser_areas = [Rect::default(); 2];
+    app.geometry.browser_inners = [Rect::default(); 2];
 
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Length(app.browser_pane_width),
-            Constraint::Min(MIN_EDITOR_PANE_WIDTH),
-        ])
-        .split(desktop);
+    if app.secondary_browser_enabled {
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(app.browser_pane_width),
+                Constraint::Length(app.browser_pane_width),
+                Constraint::Min(MIN_EDITOR_PANE_WIDTH),
+            ])
+            .split(desktop);
 
-    app.geometry.browser_area = columns[0];
-    app.geometry.editor_area = columns[1];
-    draw_browser(frame, columns[0], app);
-    draw_editor(frame, columns[1], app);
+        app.geometry.browser_areas[0] = columns[0];
+        let secondary_split = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(SECONDARY_BROWSER_GUTTER_WIDTH.min(columns[1].width)),
+                Constraint::Min(0),
+            ])
+            .split(columns[1]);
+        frame.render_widget(
+            Block::default().style(Style::default().bg(CURRENT_THEME.app_background)),
+            secondary_split[0],
+        );
+        app.geometry.browser_areas[1] = secondary_split[1];
+        app.geometry.editor_area = columns[2];
+        draw_browser(frame, columns[0], app, 0, true);
+        draw_browser(frame, secondary_split[1], app, 1, false);
+        draw_editor(frame, columns[2], app);
+    } else {
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(app.browser_pane_width),
+                Constraint::Min(MIN_EDITOR_PANE_WIDTH),
+            ])
+            .split(desktop);
+
+        app.geometry.browser_areas[0] = columns[0];
+        app.geometry.editor_area = columns[1];
+        draw_browser(frame, columns[0], app, 0, true);
+        draw_editor(frame, columns[1], app);
+    }
 }
 
-fn draw_browser(frame: &mut Frame, area: Rect, app: &mut App) {
-    let split = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(6), Constraint::Length(6)])
-        .split(area);
+fn draw_browser(frame: &mut Frame, area: Rect, app: &mut App, browser_index: usize, show_log: bool) {
+    let list_panel = if show_log {
+        let split = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(6), Constraint::Length(6)])
+            .split(area);
+        draw_browser_log(frame, split[1], app);
+        split[0]
+    } else {
+        area
+    };
 
     frame.render_widget(
         Block::default().style(Style::default().bg(CURRENT_THEME.panel_background)),
-        split[0],
+        list_panel,
     );
-    let inner = split[0];
+    let inner = list_panel;
 
-    let header_lines = wrap_path_lines(&app.browser_label(), inner.width);
+    let header_lines = wrap_path_lines(&app.browser_label(browser_index), inner.width);
     let header_height = (header_lines.len() as u16).min(inner.height);
     let sections = Layout::default()
         .direction(Direction::Vertical)
@@ -402,9 +445,11 @@ fn draw_browser(frame: &mut Frame, area: Rect, app: &mut App) {
         sections[0],
     );
 
-    app.geometry.browser_inner = list_area;
+    app.geometry.browser_inners[browser_index] = list_area;
 
-    if app.entries.is_empty() {
+    let entries = app.browser_entries(browser_index);
+
+    if entries.is_empty() {
         frame.render_widget(
             Paragraph::new(Text::from(vec![
                 Line::from("Directory is empty."),
@@ -424,18 +469,17 @@ fn draw_browser(frame: &mut Frame, area: Rect, app: &mut App) {
 
     let height = list_area.height as usize;
     if height == 0 {
-        draw_browser_log(frame, split[1], app);
         return;
     }
-    let selected = app.selected_entry;
-    let selected_bg = if app.focus == Focus::Browser {
+    let selected = app.browser_selected_entry(browser_index);
+    let selected_bg = if app.focus == if browser_index == 0 { Focus::BrowserPrimary } else { Focus::BrowserSecondary } {
         CURRENT_THEME.browser_selected_active_bg
     } else {
         CURRENT_THEME.browser_selected_inactive_bg
     };
     let start = selected.saturating_sub(height.saturating_sub(1));
     let items = app
-        .entries
+        .browser_entries(browser_index)
         .iter()
         .enumerate()
         .skip(start)
@@ -471,8 +515,6 @@ fn draw_browser(frame: &mut Frame, area: Rect, app: &mut App) {
         List::new(items).style(Style::default().bg(CURRENT_THEME.panel_background)),
         list_area,
     );
-
-    draw_browser_log(frame, split[1], app);
 }
 
 fn draw_browser_log(frame: &mut Frame, area: Rect, app: &App) {
@@ -673,13 +715,18 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
     }
 }
 
-fn clamp_browser_width(total_width: u16, current: u16) -> u16 {
+fn clamp_browser_width(total_width: u16, current: u16, browser_count: u16) -> u16 {
     if total_width <= 1 {
         return 1;
     }
 
-    let editor_reserve = MIN_EDITOR_PANE_WIDTH.min(total_width.saturating_sub(1));
-    let max_width = total_width.saturating_sub(editor_reserve).max(1);
+    let browser_count = browser_count.max(1);
+    let editor_reserve = MIN_EDITOR_PANE_WIDTH.min(total_width.saturating_sub(browser_count));
+    let max_width = total_width
+        .saturating_sub(editor_reserve)
+        .checked_div(browser_count)
+        .unwrap_or(1)
+        .max(1);
     let min_width = MIN_BROWSER_PANE_WIDTH.min(max_width);
     current.clamp(min_width, max_width)
 }
@@ -711,6 +758,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         help_bindings_line(&[("F5", "Run current file"), ("F9", "Build current file"), ("Ctrl+Q", "Quit")]),
         help_bindings_line(&[("Ctrl+S", "Save"), ("Ctrl+O", "Open selected file"), ("Ctrl+F", "Cycle pane")]),
         help_bindings_line(&[("Ctrl+L", "Redraw screen"), ("Ctrl+R", "Run current file"), ("Ctrl+B", "Build current file")]),
+        help_bindings_line(&[("`", "Toggle second files pane")]),
         help_bindings_line(&[("Ctrl+Space", "Toggle select mode")]),
         help_bindings_line(&[("Ctrl+C", "Copy"), ("Ctrl+X", "Cut"), ("Ctrl+V", "Paste"), ("Ctrl+Z", "Undo")]),
         help_bindings_line(&[("Ctrl+Ins", "Copy"), ("Shift+Ins", "Paste"), ("Shift+Del", "Cut")]),
