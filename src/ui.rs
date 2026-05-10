@@ -95,7 +95,7 @@ const SECONDARY_BROWSER_HEADER_BINDINGS: [(&str, &str); 4] = [
 ];
 const PRIMARY_HEADER_BINDINGS: [(&str, &str); 4] = [
     ("F1", " Help  "),
-    ("`", " 2nd  "),
+    ("`", " Dual "),
     ("F4", " Pane  "),
     ("F10", " Menu"),
 ];
@@ -853,12 +853,12 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         help_bindings_line(&[("F8", "Delete entry"), ("F9", "Build current file"), ("Ctrl+Q", "Quit")]),
         help_bindings_line(&[("Ctrl+S", "Save"), ("Ctrl+O", "Open selected file"), ("Ctrl+F", "Regex search")]),
         help_bindings_line(&[("Ctrl+L", "Redraw screen"), ("Ctrl+R", "Run current file"), ("Ctrl+B", "Build current file")]),
-        help_bindings_line(&[("`", "Toggle second files pane")]),
+        help_bindings_line(&[("`", "Toggle dual pane")]),
         help_bindings_line(&[("Ctrl+Space", "Toggle select mode")]),
         help_bindings_line(&[("Ctrl+C", "Copy"), ("Ctrl+X", "Cut"), ("Ctrl+V", "Paste"), ("Ctrl+Z", "Undo")]),
         help_bindings_line(&[("Ctrl+Y", "Redo")]),
         help_bindings_line(&[("Ctrl+Ins", "Copy"), ("Shift+Ins", "Paste"), ("Shift+Del", "Cut")]),
-        help_bindings_line(&[("Alt+X", "Delete line"), ("Alt+U", "Duplicate line")]),
+        help_bindings_line(&[("Ctrl+K", "Delete line")]),
         Line::from(""),
         help_section_line("Browser"),
         help_bindings_line(&[("Up/Down", "Move selection"), ("Home/End", "Jump to first/last")]),

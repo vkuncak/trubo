@@ -39,8 +39,7 @@ pub const MENUS: [Menu; 6] = [
             MenuItem::action("Paste", "Ctrl+V", MenuAction::Paste),
             MenuItem::action("Search", "Ctrl+F", MenuAction::Search),
             MenuItem::separator(),
-            MenuItem::action("Delete line", "Alt+X", MenuAction::DeleteLine),
-            MenuItem::action("Duplicate line", "Alt+U", MenuAction::DuplicateLine),
+            MenuItem::action("Delete line", "Ctrl+K", MenuAction::DeleteLine),
         ],
     },
     Menu {
@@ -48,6 +47,7 @@ pub const MENUS: [Menu; 6] = [
         items: &[
             MenuItem::action("Files pane", "", MenuAction::FocusBrowser),
             MenuItem::action("Editor pane", "", MenuAction::FocusEditor),
+            MenuItem::action("Toggle Dual Pane", "`", MenuAction::ToggleDualPane),
             MenuItem::separator(),
             MenuItem::action("Next pane", "F4", MenuAction::ToggleFocus),
         ],
@@ -128,10 +128,10 @@ pub enum MenuAction {
     NewDirectory,
     DeleteEntry,
     DeleteLine,
-    DuplicateLine,
     CargoRun,
     CargoBuild,
     ToggleFocus,
+    ToggleDualPane,
     FocusBrowser,
     FocusEditor,
     Help,
@@ -937,10 +937,10 @@ impl App {
             MenuAction::NewDirectory => self.request_new_directory(),
             MenuAction::DeleteEntry => self.request_delete_selected_entry(),
             MenuAction::DeleteLine => self.editor.delete_line(),
-            MenuAction::DuplicateLine => self.editor.duplicate_line(),
             MenuAction::CargoRun => self.run_current_target(),
             MenuAction::CargoBuild => self.build_current_target(),
             MenuAction::ToggleFocus => self.toggle_focus(),
+            MenuAction::ToggleDualPane => self.toggle_secondary_browser(),
             MenuAction::FocusBrowser => self.set_focus(Focus::BrowserPrimary),
             MenuAction::FocusEditor => self.set_focus(Focus::Editor),
             MenuAction::Help => self.help_open = true,
@@ -1484,15 +1484,6 @@ impl App {
     }
 
     fn handle_editor_key(&mut self, key: KeyEvent) {
-        if key.modifiers.contains(KeyModifiers::ALT) {
-            match key.code {
-                KeyCode::Char('x') | KeyCode::Char('X') => self.editor.delete_line(),
-                KeyCode::Char('u') | KeyCode::Char('U') => self.editor.duplicate_line(),
-                _ => {}
-            }
-            return;
-        }
-
         let selecting = key.modifiers.contains(KeyModifiers::SHIFT) || self.selection_mode;
         match key.code {
             KeyCode::Left if selecting => self.editor.extend_left(),

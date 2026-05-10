@@ -463,16 +463,6 @@ impl Editor {
         self.keep_cursor_visible();
     }
 
-    pub fn duplicate_line(&mut self) {
-        self.capture_undo_state();
-        self.clear_selection();
-        let line = self.lines[self.cursor_row].clone();
-        self.lines.insert(self.cursor_row + 1, line);
-        self.cursor_row += 1;
-        self.dirty = true;
-        self.keep_cursor_visible();
-    }
-
     pub fn undo(&mut self) -> bool {
         let Some(state) = self.undo_stack.pop() else {
             return false;

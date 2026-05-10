@@ -184,6 +184,9 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
             KeyCode::Char('c') | KeyCode::Char('C') => app.copy_selection(),
             KeyCode::Char('x') | KeyCode::Char('X') => app.cut_selection(),
             KeyCode::Char('v') | KeyCode::Char('V') => app.paste_from_clipboard(),
+            KeyCode::Char('k') | KeyCode::Char('K') if app.focus == Focus::Editor => {
+                app.editor.delete_line()
+            }
             KeyCode::Char('z') | KeyCode::Char('Z') => app.undo_last_edit(),
             KeyCode::Char('y') | KeyCode::Char('Y') => app.redo_last_edit(),
             KeyCode::Insert => app.copy_selection(),
