@@ -35,6 +35,8 @@ struct UndoState {
     dirty: bool,
 }
 
+const MAX_UNDO_HISTORY: usize = 100;
+
 #[derive(Debug, Clone)]
 pub struct Editor {
     path: Option<PathBuf>,
@@ -48,7 +50,7 @@ pub struct Editor {
     viewport_rows: usize,
     viewport_cols: usize,
     selection_anchor: Option<Position>,
-    undo_state: Option<UndoState>,
+    undo_stack: Vec<UndoState>,
     dirty: bool,
 }
 
@@ -66,7 +68,7 @@ impl Editor {
             viewport_rows: 18,
             viewport_cols: 72,
             selection_anchor: None,
-            undo_state: None,
+            undo_stack: Vec::new(),
             dirty: false,
         }
     }
@@ -84,7 +86,7 @@ impl Editor {
             viewport_rows: 18,
             viewport_cols: 72,
             selection_anchor: None,
-            undo_state: None,
+            undo_stack: Vec::new(),
             dirty: false,
         }
     }
@@ -110,7 +112,7 @@ impl Editor {
             viewport_rows: 18,
             viewport_cols: 72,
             selection_anchor: None,
-            undo_state: None,
+            undo_stack: Vec::new(),
             dirty: false,
         })
     }
@@ -468,7 +470,7 @@ impl Editor {
     }
 
     pub fn undo(&mut self) -> bool {
-        let Some(state) = self.undo_state.take() else {
+        let Some(state) = self.undo_stack.pop() else {
             return false;
         };
 
@@ -652,7 +654,11 @@ impl Editor {
     }
 
     fn capture_undo_state(&mut self) {
-        self.undo_state = Some(UndoState {
+        if self.undo_stack.len() == MAX_UNDO_HISTORY {
+            self.undo_stack.remove(0);
+        }
+
+        self.undo_stack.push(UndoState {
             lines: self.lines.clone(),
             cursor_row: self.cursor_row,
             cursor_col: self.cursor_col,
@@ -950,8 +956,27 @@ mod tests {
 
         assert!(editor.undo());
         assert_eq!(editor.lines(), &["abcd".to_string()]);
+        assert!(editor.undo());
+        assert_eq!(editor.lines(), &["".to_string()]);
+        assert!(!editor.undo());
+    }
 
-        // Single-step undo: no additional history beyond the last edit.
+    #[test]
+    fn undo_reverts_multiple_edits_in_order() {
+        let mut editor = Editor::scratch();
+        editor.insert_text("abc");
+        editor.insert_char('d');
+        editor.backspace();
+
+        assert!(editor.undo());
+        assert_eq!(editor.lines(), &["abcd".to_string()]);
+
+        assert!(editor.undo());
+        assert_eq!(editor.lines(), &["abc".to_string()]);
+
+        assert!(editor.undo());
+        assert_eq!(editor.lines(), &["".to_string()]);
+
         assert!(!editor.undo());
     }
 
