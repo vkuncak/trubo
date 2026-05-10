@@ -14,7 +14,7 @@ use ratatui::layout::Rect;
 use crate::{
     editor::Editor,
     file_types::{ToolInvocation, detect_file_type},
-    project::{ProjectEntry, list_directory},
+    project::{ProjectEntry, directory_subtree_lines, list_directory},
 };
 
 pub const MENUS: [Menu; 5] = [
@@ -162,6 +162,7 @@ pub struct Geometry {
 pub const MIN_BROWSER_PANE_WIDTH: u16 = 18;
 pub const MIN_EDITOR_PANE_WIDTH: u16 = 24;
 const BROWSER_PREVIEW_DELAY: Duration = Duration::from_millis(200);
+const DIRECTORY_PREVIEW_MAX_ENTRIES: usize = 256;
 
 #[derive(Debug)]
 pub struct App {
@@ -179,6 +180,7 @@ pub struct App {
     pub status: String,
     pub browser_pane_width: u16,
     pub geometry: Geometry,
+    preview_label: Option<String>,
     full_redraw_requested: bool,
     browser_preview_due_at: Option<Instant>,
     drag_target: Option<DragTarget>,
@@ -210,6 +212,7 @@ impl App {
             status: "Ready".to_string(),
             browser_pane_width: 30,
             geometry: Geometry::default(),
+            preview_label: None,
             full_redraw_requested: false,
             browser_preview_due_at: None,
             drag_target: None,
@@ -287,7 +290,18 @@ impl App {
             return;
         };
 
-        if entry.is_directory() {
+        if entry.kind == crate::project::ProjectEntryKind::Directory {
+            let preview_label = format!("{} [tree]", entry.path.display());
+            if self.preview_label.as_deref() == Some(preview_label.as_str()) {
+                return;
+            }
+
+            self.editor = Editor::from_lines(directory_subtree_lines(
+                &entry.path,
+                DIRECTORY_PREVIEW_MAX_ENTRIES,
+            ));
+            self.preview_label = Some(preview_label);
+            self.status = format!("Previewed tree for {}", entry.path.display());
             return;
         }
 
@@ -299,6 +313,7 @@ impl App {
         match Editor::open(&path) {
             Ok(editor) => {
                 self.editor = editor;
+                self.preview_label = None;
                 self.status = format!("Previewed {}", path.display());
             }
             Err(error) => {
@@ -315,6 +330,10 @@ impl App {
     }
 
     pub fn current_file_label(&self) -> String {
+        if let Some(label) = &self.preview_label {
+            return label.clone();
+        }
+
         self.editor
             .path()
             .map(|path| path.display().to_string())
@@ -344,6 +363,7 @@ impl App {
         match Editor::open(&path) {
             Ok(editor) => {
                 self.editor = editor;
+                self.preview_label = None;
                 self.assign_focus(Focus::Editor);
                 self.status = format!("Opened {}", path.display());
             }
@@ -820,6 +840,8 @@ impl App {
         match key.code {
             KeyCode::Up => self.select_previous_entry(),
             KeyCode::Down => self.select_next_entry(),
+            KeyCode::PageUp => self.page_up_browser(),
+            KeyCode::PageDown => self.page_down_browser(),
             KeyCode::Home => self.set_selected_entry(0),
             KeyCode::End => {
                 self.set_selected_entry(self.entries.len().saturating_sub(1));
@@ -886,6 +908,24 @@ impl App {
         if !self.entries.is_empty() {
             self.set_selected_entry((self.selected_entry + 1).min(self.entries.len() - 1));
         }
+    }
+
+    fn page_up_browser(&mut self) {
+        let page_size = self.browser_page_size();
+        self.set_selected_entry(self.selected_entry.saturating_sub(page_size));
+    }
+
+    fn page_down_browser(&mut self) {
+        if self.entries.is_empty() {
+            return;
+        }
+
+        let page_size = self.browser_page_size();
+        self.set_selected_entry((self.selected_entry + page_size).min(self.entries.len() - 1));
+    }
+
+    fn browser_page_size(&self) -> usize {
+        (self.geometry.browser_inner.height as usize).max(1)
     }
 
     fn set_selected_entry(&mut self, index: usize) {

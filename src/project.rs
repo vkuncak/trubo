@@ -72,6 +72,85 @@ pub fn list_directory(dir: &Path) -> Vec<ProjectEntry> {
     directories
 }
 
+pub fn directory_subtree_lines(dir: &Path, max_entries: usize) -> Vec<String> {
+    let mut lines = vec![format!("{}/", file_name(dir))];
+    let mut remaining = max_entries.saturating_sub(1);
+
+    let truncated = append_subtree(dir, "", &mut remaining, &mut lines);
+    if truncated {
+        lines.push("...".to_string());
+    }
+
+    lines
+}
+
+fn append_subtree(
+    dir: &Path,
+    prefix: &str,
+    remaining: &mut usize,
+    lines: &mut Vec<String>,
+) -> bool {
+    let entries = child_entries(dir);
+
+    for (index, entry) in entries.iter().enumerate() {
+        if *remaining == 0 {
+            return true;
+        }
+
+        *remaining -= 1;
+        let is_last = index + 1 == entries.len();
+        let branch = if is_last { "`-- " } else { "|-- " };
+        lines.push(format!("{prefix}{branch}{}", entry.label));
+
+        if entry.kind == ProjectEntryKind::Directory {
+            let child_prefix = format!("{prefix}{}", if is_last { "    " } else { "|   " });
+            if append_subtree(&entry.path, &child_prefix, remaining, lines) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn child_entries(dir: &Path) -> Vec<ProjectEntry> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+
+    let mut directories = Vec::new();
+    let mut files = Vec::new();
+
+    let mut entries: Vec<_> = entries.filter_map(Result::ok).collect();
+    entries.sort_by_key(|entry| entry.path());
+
+    for entry in entries {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+
+        if file_type.is_dir() {
+            directories.push(ProjectEntry {
+                label: format!("{}/", file_name(&path)),
+                path,
+                kind: ProjectEntryKind::Directory,
+            });
+        } else if file_type.is_file() {
+            files.push(ProjectEntry {
+                label: file_name(&path),
+                path,
+                kind: ProjectEntryKind::File,
+            });
+        }
+    }
+
+    directories.sort_by(|a, b| a.label.cmp(&b.label));
+    files.sort_by(|a, b| a.label.cmp(&b.label));
+    directories.extend(files);
+    directories
+}
+
 fn file_name(path: &Path) -> String {
     path.file_name()
         .and_then(|name| name.to_str())

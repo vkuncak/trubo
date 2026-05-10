@@ -69,6 +69,23 @@ impl Editor {
         }
     }
 
+    pub fn from_lines(lines: Vec<String>) -> Self {
+        Self {
+            path: None,
+            lines: if lines.is_empty() { vec![String::new()] } else { lines },
+            cursor_row: 0,
+            cursor_col: 0,
+            row_offset: 0,
+            row_segment_offset: 0,
+            col_offset: 0,
+            viewport_rows: 18,
+            viewport_cols: 72,
+            selection_anchor: None,
+            undo_state: None,
+            dirty: false,
+        }
+    }
+
     pub fn open(path: &Path) -> io::Result<Self> {
         let content = read_to_string(path)?;
         let mut lines: Vec<String> = content.lines().map(ToString::to_string).collect();
