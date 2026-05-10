@@ -11,6 +11,8 @@ It's originally based on TRUST ( https://github.com/wojtczyk/trust ) from which 
 
 In the meantime, it was extended step by step using guidance by Viktor Kuncak and using LLMs, primarily GPT 5.4.
 
+See [CONTRIBUTORS](CONTRIBUTORS) for the current contributor list.
+
 Hihlights:
 
   * Name changed to "trubo"
