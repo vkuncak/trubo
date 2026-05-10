@@ -14,7 +14,7 @@ use std::{
     time::Duration,
 };
 
-use app::{Action, App};
+use app::{Action, App, Focus};
 use crossterm::{
     event::{
         self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
@@ -178,6 +178,8 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
         match key.code {
             KeyCode::Left => app.focus_browser(),
             KeyCode::Right => app.focus_editor(),
+            KeyCode::Home | KeyCode::PageUp if app.focus == Focus::Editor => app.editor.file_home(),
+            KeyCode::End | KeyCode::PageDown if app.focus == Focus::Editor => app.editor.file_end(),
             KeyCode::Char('l') | KeyCode::Char('L') => app.request_full_redraw(),
             KeyCode::Char('c') | KeyCode::Char('C') => app.copy_selection(),
             KeyCode::Char('x') | KeyCode::Char('X') => app.cut_selection(),

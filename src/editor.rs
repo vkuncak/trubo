@@ -3,8 +3,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::app::read_to_string;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Position {
     pub row: usize,
@@ -19,6 +17,8 @@ enum Movement {
     Down,
     Home,
     End,
+    FileHome,
+    FileEnd,
     PageUp(usize),
     PageDown(usize),
 }
@@ -39,6 +39,7 @@ struct UndoState {
 pub struct Editor {
     path: Option<PathBuf>,
     lines: Vec<String>,
+    binary_size: Option<u64>,
     cursor_row: usize,
     cursor_col: usize,
     row_offset: usize,
@@ -56,6 +57,7 @@ impl Editor {
         Self {
             path: None,
             lines: vec![String::new()],
+            binary_size: None,
             cursor_row: 0,
             cursor_col: 0,
             row_offset: 0,
@@ -73,6 +75,7 @@ impl Editor {
         Self {
             path: None,
             lines: if lines.is_empty() { vec![String::new()] } else { lines },
+            binary_size: None,
             cursor_row: 0,
             cursor_col: 0,
             row_offset: 0,
@@ -87,7 +90,9 @@ impl Editor {
     }
 
     pub fn open(path: &Path) -> io::Result<Self> {
-        let content = read_to_string(path)?;
+        let bytes = fs::read(path)?;
+        let binary_size = is_binary_bytes(&bytes).then_some(bytes.len() as u64);
+        let content = String::from_utf8_lossy(&bytes).into_owned();
         let mut lines: Vec<String> = content.lines().map(ToString::to_string).collect();
         if content.ends_with('\n') || lines.is_empty() {
             lines.push(String::new());
@@ -96,6 +101,7 @@ impl Editor {
         Ok(Self {
             path: Some(path.to_path_buf()),
             lines,
+            binary_size,
             cursor_row: 0,
             cursor_col: 0,
             row_offset: 0,
@@ -116,6 +122,7 @@ impl Editor {
 
         fs::write(path, self.lines.join("\n"))?;
         self.dirty = false;
+        self.binary_size = None;
         Ok(())
     }
 
@@ -125,6 +132,13 @@ impl Editor {
 
     pub fn lines(&self) -> &[String] {
         &self.lines
+    }
+
+    pub fn header_metric_label(&self) -> String {
+        match self.binary_size {
+            Some(size) => format!("{size} bytes"),
+            None => format!("{} LOC", self.lines.len()),
+        }
     }
 
     pub fn cursor_row(&self) -> usize {
@@ -275,6 +289,14 @@ impl Editor {
 
     pub fn page_down(&mut self, rows: usize) {
         self.move_cursor(Movement::PageDown(rows), false);
+    }
+
+    pub fn file_home(&mut self) {
+        self.move_cursor(Movement::FileHome, false);
+    }
+
+    pub fn file_end(&mut self) {
+        self.move_cursor(Movement::FileEnd, false);
     }
 
     pub fn extend_left(&mut self) {
@@ -500,6 +522,14 @@ impl Editor {
             Movement::Down => self.step_down(),
             Movement::Home => self.cursor_col = 0,
             Movement::End => self.cursor_col = self.line_len(self.cursor_row),
+            Movement::FileHome => {
+                self.cursor_row = 0;
+                self.cursor_col = 0;
+            }
+            Movement::FileEnd => {
+                self.cursor_row = self.lines.len().saturating_sub(1);
+                self.cursor_col = self.line_len(self.cursor_row);
+            }
             Movement::PageUp(rows) => {
                 for _ in 0..rows {
                     self.step_up();
@@ -700,9 +730,13 @@ fn wrapped_rows(line_len: usize, cols: usize) -> usize {
     line_len.max(1).div_ceil(cols)
 }
 
+fn is_binary_bytes(bytes: &[u8]) -> bool {
+    bytes.contains(&0) || std::str::from_utf8(bytes).is_err()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Editor;
+    use super::{Editor, is_binary_bytes};
 
     #[test]
     fn selects_and_cuts_across_lines() {
@@ -885,5 +919,39 @@ mod tests {
 
         // Single-step undo: no additional history beyond the last edit.
         assert!(!editor.undo());
+    }
+
+    #[test]
+    fn file_home_moves_to_start_of_buffer() {
+        let mut editor = Editor::scratch();
+        editor.insert_text("alpha\nbeta\ngamma");
+        editor.set_cursor(2, 3);
+
+        editor.file_home();
+
+        assert_eq!(editor.cursor_row(), 0);
+        assert_eq!(editor.cursor_col(), 0);
+    }
+
+    #[test]
+    fn file_end_moves_to_end_of_buffer() {
+        let mut editor = Editor::scratch();
+        editor.insert_text("alpha\nbeta\ngamma");
+        editor.set_cursor(0, 1);
+
+        editor.file_end();
+
+        assert_eq!(editor.cursor_row(), 2);
+        assert_eq!(editor.cursor_col(), 5);
+    }
+
+    #[test]
+    fn detects_utf8_text_as_not_binary() {
+        assert!(!is_binary_bytes("hello\nworld".as_bytes()));
+    }
+
+    #[test]
+    fn detects_nul_bytes_as_binary() {
+        assert!(is_binary_bytes(&[0x66, 0x6f, 0x00, 0x6f]));
     }
 }

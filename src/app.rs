@@ -1735,11 +1735,6 @@ fn remove_path(path: &Path) -> io::Result<()> {
     }
 }
 
-pub fn read_to_string(path: &Path) -> io::Result<String> {
-    let bytes = fs::read(path)?;
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
-}
-
 fn contains(area: Rect, column: u16, row: u16) -> bool {
     contains_x(area, column) && contains_y(area, row)
 }

@@ -198,8 +198,14 @@ fn build_header_left_spans(app: &App, width: u16, base: Style, key: Style) -> Ve
     }
 
     let dirty = if app.editor.is_dirty() { " *" } else { "" };
+    let label = format!(
+        " {} ({}){} ",
+        app.current_file_label(),
+        app.editor.header_metric_label(),
+        dirty,
+    );
     fit_header_segments(
-        vec![(format!(" {}{} ", app.current_file_label(), dirty), false)],
+        vec![(label, false)],
         width,
         base,
         key,
@@ -847,6 +853,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         help_bindings_line(&[("Enter", "Open file or directory"), ("Backspace", "Parent directory"), ("R", "Refresh")]),
         help_section_line("Editor"),
         help_bindings_line(&[("Arrows", "Move cursor"), ("Home/End", "Line start/end"), ("PgUp/PgDn", "Scroll")]),
+        help_bindings_line(&[("Ctrl+Home/Ctrl+PgUp", "Start of file"), ("Ctrl+End/Ctrl+PgDn", "End of file")]),
         help_bindings_line(&[("Shift+Arrows/Home/End/Pg", "Extend selection"), ("Backspace/Delete", "Delete text")]),
         help_bindings_line(&[("Enter", "New line"), ("Typing", "Insert text")]),
         help_section_line("Menus and dialogs"),
