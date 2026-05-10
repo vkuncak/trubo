@@ -99,11 +99,11 @@ fn append_subtree(
 
         *remaining -= 1;
         let is_last = index + 1 == entries.len();
-        let branch = if is_last { "`-- " } else { "|-- " };
+        let branch = if is_last { "└── " } else { "├── " };
         lines.push(format!("{prefix}{branch}{}", entry.label));
 
         if entry.kind == ProjectEntryKind::Directory {
-            let child_prefix = format!("{prefix}{}", if is_last { "    " } else { "|   " });
+            let child_prefix = format!("{prefix}{}", if is_last { "    " } else { "│   " });
             if append_subtree(&entry.path, &child_prefix, remaining, lines) {
                 return true;
             }
