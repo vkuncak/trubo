@@ -1,4 +1,5 @@
 use std::{
+    ffi::OsString,
     fs, io,
     path::{Path, PathBuf},
 };
@@ -36,6 +37,12 @@ struct UndoState {
 }
 
 const MAX_UNDO_HISTORY: usize = 100;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaveOutcome {
+    Saved,
+    Unchanged,
+}
 
 #[derive(Debug, Clone)]
 pub struct Editor {
@@ -121,15 +128,23 @@ impl Editor {
         })
     }
 
-    pub fn save(&mut self) -> io::Result<()> {
+    pub fn save(&mut self) -> io::Result<SaveOutcome> {
         let Some(path) = &self.path else {
             return Err(io::Error::other("scratch buffer has no path"));
         };
 
+        if !self.dirty {
+            return Ok(SaveOutcome::Unchanged);
+        }
+
+        if path.exists() {
+            fs::copy(path, backup_path(path)?)?;
+        }
+
         fs::write(path, self.lines.join("\n"))?;
         self.dirty = false;
         self.binary_size = None;
-        Ok(())
+        Ok(SaveOutcome::Saved)
     }
 
     pub fn path(&self) -> Option<&Path> {
@@ -778,6 +793,16 @@ fn wrapped_rows(line_len: usize, cols: usize) -> usize {
     line_len.max(1).div_ceil(cols)
 }
 
+fn backup_path(path: &Path) -> io::Result<PathBuf> {
+    let Some(file_name) = path.file_name() else {
+        return Err(io::Error::other("file path has no file name"));
+    };
+
+    let mut backup_name = OsString::from(file_name);
+    backup_name.push("~");
+    Ok(path.with_file_name(backup_name))
+}
+
 fn is_binary_bytes(bytes: &[u8]) -> bool {
     bytes.contains(&0) || std::str::from_utf8(bytes).is_err()
 }
@@ -791,7 +816,48 @@ fn push_history_state(stack: &mut Vec<UndoState>, state: UndoState) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Editor, is_binary_bytes};
+    use std::{
+        env,
+        fs,
+        path::PathBuf,
+        process,
+        sync::atomic::{AtomicU64, Ordering},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use super::{Editor, SaveOutcome, is_binary_bytes};
+
+    static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    struct TestDir {
+        path: PathBuf,
+    }
+
+    impl TestDir {
+        fn new() -> Self {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock before unix epoch")
+                .as_nanos();
+            let counter = TEMP_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let path = env::temp_dir().join(format!(
+                "trubo-editor-tests-{}-{unique}-{counter}",
+                process::id()
+            ));
+            fs::create_dir_all(&path).expect("create temp test directory");
+            Self { path }
+        }
+
+        fn path(&self) -> &PathBuf {
+            &self.path
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
 
     #[test]
     fn selects_and_cuts_across_lines() {
@@ -1044,6 +1110,48 @@ mod tests {
 
         assert!(!editor.redo());
         assert_eq!(editor.lines(), &["abcx".to_string()]);
+    }
+
+    #[test]
+    fn save_creates_backup_with_previous_contents() {
+        let test_dir = TestDir::new();
+        let path = test_dir.path().join("demo.txt");
+        let backup_path = test_dir.path().join("demo.txt~");
+
+        fs::write(&path, "old value").expect("write original file");
+        fs::write(&backup_path, "stale backup").expect("write existing backup");
+
+        let mut editor = Editor::open(&path).expect("open file");
+    editor.lines = vec!["new value".to_string()];
+    editor.dirty = true;
+
+        assert_eq!(editor.save().expect("save edited file"), SaveOutcome::Saved);
+        assert_eq!(fs::read_to_string(&path).expect("read saved file"), "new value");
+        assert_eq!(
+            fs::read_to_string(&backup_path).expect("read backup file"),
+            "old value"
+        );
+        assert!(!editor.is_dirty());
+    }
+
+    #[test]
+    fn save_unchanged_file_does_not_rewrite_or_touch_backup() {
+        let test_dir = TestDir::new();
+        let path = test_dir.path().join("demo.txt");
+        let backup_path = test_dir.path().join("demo.txt~");
+
+        fs::write(&path, "current value").expect("write original file");
+        fs::write(&backup_path, "existing backup").expect("write existing backup");
+
+        let mut editor = Editor::open(&path).expect("open file");
+
+        assert_eq!(editor.save().expect("save unchanged file"), SaveOutcome::Unchanged);
+        assert_eq!(fs::read_to_string(&path).expect("read original file"), "current value");
+        assert_eq!(
+            fs::read_to_string(&backup_path).expect("read backup file"),
+            "existing backup"
+        );
+        assert!(!editor.is_dirty());
     }
 
     #[test]

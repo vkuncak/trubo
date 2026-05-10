@@ -2,10 +2,7 @@
 
 Text (Rust, Unicode, Basic) Operator
 
-trubo is a retro TUI text editor and file manager in Rust.
-
-Status: experimental nostalgia project. It edits text files, browses
-directories, and keeps the UI intentionally loud.
+trubo is an EXPERIMENTAL retro TUI text editor and file manager in Rust. 
 
 It's originally based on TRUST ( https://github.com/wojtczyk/trust ) from which this was forked.
 
@@ -13,7 +10,7 @@ In the meantime, it was extended step by step using guidance by Viktor Kuncak an
 
 See [CONTRIBUTORS](CONTRIBUTORS) for the current contributor list.
 
-Hihlights:
+Highlights:
 
   * Name changed to "trubo"
   * Dual pane with file operations and preview
@@ -41,7 +38,7 @@ That documentation is the source of truth for:
 - operating modes: editor-only, single-pane, dual-pane
 - current keyboard and mouse controls
 - browser file operations
-- run/build behavior
+- the (rudimentary!) run/build behavior 
 - editor features and limitations
 
 ## Quick Start

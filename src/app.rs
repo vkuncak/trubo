@@ -13,7 +13,7 @@ use regex::Regex;
 use ratatui::layout::Rect;
 
 use crate::{
-    editor::Editor,
+    editor::{Editor, SaveOutcome},
     file_types::{ToolInvocation, detect_file_type},
     project::{ProjectEntry, ProjectEntryKind, directory_subtree_lines, list_directory},
 };
@@ -636,10 +636,11 @@ impl App {
     pub fn save_current(&mut self) -> bool {
         self.close_menu();
         match self.editor.save() {
-            Ok(()) => {
+            Ok(SaveOutcome::Saved) => {
                 self.status = format!("Saved {}", self.current_file_label());
                 true
             }
+            Ok(SaveOutcome::Unchanged) => true,
             Err(error) => {
                 self.status = format!("Save failed: {error}");
                 false
