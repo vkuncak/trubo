@@ -32,6 +32,7 @@ struct Theme {
     menu_selected_bg: Color,
     menu_selected_fg: Color,
     menu_selected_hotkey_fg: Color,
+    dialog_border: Color,
     dialog_background: Color,
     status_bar_bg: Color,
     status_bar_fg: Color,
@@ -68,6 +69,7 @@ const CURRENT_THEME: Theme = Theme {
     menu_selected_bg: Color::Rgb(100, 255, 255),
     menu_selected_fg: Color::Rgb(0, 0, 0),
     menu_selected_hotkey_fg: Color::Rgb(170, 0, 0),
+    dialog_border: Color::Rgb(0, 0, 0),
     dialog_background: Color::Rgb(210, 230, 255),
     status_bar_bg: Color::Rgb(200, 200, 200),
     status_bar_fg: Color::Rgb(0, 0, 0),
@@ -928,18 +930,7 @@ fn draw_dialog(frame: &mut Frame, app: &App, dialog: Dialog, area: Rect) {
 }
 
 fn draw_about_dialog(frame: &mut Frame, area: Rect) {
-    let inner = area.inner(Margin {
-        vertical: 0,
-        horizontal: 1,
-    });
-    frame.render_widget(
-        Block::default().style(
-            Style::default()
-                .fg(CURRENT_THEME.menu_bar_fg)
-                .bg(CURRENT_THEME.dialog_background),
-        ),
-        area,
-    );
+    let inner = draw_dialog_shell(frame, area);
 
     let text = Text::from(vec![
         Line::from(""),
@@ -998,13 +989,9 @@ fn draw_save_file_dialog(frame: &mut Frame, app: &App, area: Rect) {
         .bg(CURRENT_THEME.dialog_background)
         .add_modifier(Modifier::BOLD);
 
-    frame.render_widget(
-        Block::default().style(Style::default().bg(CURRENT_THEME.dialog_background)),
-        area,
-    );
-    let content_area = area.inner(Margin {
+    let content_area = draw_dialog_shell(frame, area).inner(Margin {
         vertical: 0,
-        horizontal: 2,
+        horizontal: 1,
     });
 
     let text = Text::from(vec![
@@ -1127,13 +1114,9 @@ fn draw_text_input_dialog(
         .bg(CURRENT_THEME.dialog_background)
         .add_modifier(Modifier::BOLD);
 
-    frame.render_widget(
-        Block::default().style(Style::default().bg(CURRENT_THEME.dialog_background)),
-        area,
-    );
-    let content_area = area.inner(Margin {
+    let content_area = draw_dialog_shell(frame, area).inner(Margin {
         vertical: 0,
-        horizontal: 2,
+        horizontal: 1,
     });
     let has_detail = detail.is_some();
 
@@ -1269,15 +1252,26 @@ fn confirm_file_operation_dialog_height(app: &App) -> u16 {
 }
 
 fn draw_compact_dialog_shell(frame: &mut Frame, area: Rect) -> Rect {
+    draw_dialog_shell(frame, area)
+}
+
+fn draw_dialog_shell(frame: &mut Frame, area: Rect) -> Rect {
     frame.render_widget(
-        Block::default().style(Style::default().bg(CURRENT_THEME.dialog_background)),
+        Block::default().style(Style::default().bg(CURRENT_THEME.dialog_border)),
         area,
     );
 
-    area.inner(Margin {
-        vertical: 0,
-        horizontal: 0,
-    })
+    let content_area = area.inner(Margin {
+        vertical: 1,
+        horizontal: 1,
+    });
+
+    frame.render_widget(
+        Block::default().style(Style::default().bg(CURRENT_THEME.dialog_background)),
+        content_area,
+    );
+
+    content_area
 }
 
 fn placed_rect_near(root: Rect, preferred_x: u16, preferred_y: u16, width: u16, height: u16) -> Rect {
