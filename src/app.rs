@@ -154,6 +154,7 @@ pub enum Dialog {
     About,
     SaveFile,
     NewDirectory,
+    FileOperationName,
     ConfirmFileOperation,
 }
 
@@ -232,6 +233,7 @@ pub struct App {
     pending_new_directory_browser: Option<usize>,
     new_directory_name: String,
     pending_file_operation: Option<PendingFileOperation>,
+    pending_file_operation_name: String,
     full_redraw_requested: bool,
     browser_preview_due_at: Option<Instant>,
     drag_target: Option<DragTarget>,
@@ -269,6 +271,7 @@ impl App {
             pending_new_directory_browser: None,
             new_directory_name: String::new(),
             pending_file_operation: None,
+            pending_file_operation_name: String::new(),
             full_redraw_requested: false,
             browser_preview_due_at: None,
             drag_target: None,
@@ -417,7 +420,8 @@ impl App {
     }
 
     pub fn pending_file_operation_title(&self) -> Option<&'static str> {
-        self.pending_file_operation.as_ref().map(|operation| operation.kind.title())
+        let operation = self.pending_file_operation.as_ref()?;
+        Some(operation.kind.confirm_title(operation.source_path.parent(), operation.target_path.as_deref().and_then(Path::parent)))
     }
 
     pub fn pending_file_operation_paths(&self) -> Option<(String, Option<String>)> {
@@ -429,6 +433,22 @@ impl App {
                 .as_ref()
                 .map(|path| path.display().to_string()),
         ))
+    }
+
+    pub fn pending_file_operation_prompt_title(&self) -> Option<&'static str> {
+        let operation = self.pending_file_operation.as_ref()?;
+        Some(operation.kind.name_prompt_title())
+    }
+
+    pub fn pending_file_operation_parent(&self) -> Option<String> {
+        let operation = self.pending_file_operation.as_ref()?;
+        let parent = operation.target_path.as_deref()?.parent()?;
+        Some(parent.display().to_string())
+    }
+
+    pub fn pending_file_operation_name(&self) -> Option<&str> {
+        self.pending_file_operation.as_ref()?;
+        Some(self.pending_file_operation_name.as_str())
     }
 
     pub fn pending_new_directory_parent(&self) -> Option<String> {
@@ -663,14 +683,36 @@ impl App {
                 }
                 _ => Action::None,
             },
+            Dialog::FileOperationName => match _key.code {
+                KeyCode::Enter => {
+                    self.confirm_file_operation_name();
+                    Action::None
+                }
+                KeyCode::Esc => {
+                    self.clear_file_operation_request();
+                    self.status = "File operation cancelled".to_string();
+                    Action::None
+                }
+                KeyCode::Backspace => {
+                    self.pending_file_operation_name.pop();
+                    Action::None
+                }
+                KeyCode::Char(character)
+                    if !_key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !_key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    self.pending_file_operation_name.push(character);
+                    Action::None
+                }
+                _ => Action::None,
+            },
             Dialog::ConfirmFileOperation => match _key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
                     self.confirm_pending_file_operation();
                     Action::None
                 }
                 KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                    self.pending_file_operation = None;
-                    self.dialog = None;
+                    self.clear_file_operation_request();
                     self.status = "File operation cancelled".to_string();
                     Action::None
                 }
@@ -1090,6 +1132,19 @@ impl App {
             target_path,
             browser_index,
         });
+
+        if self.should_prompt_for_file_operation_name() {
+            self.pending_file_operation_name = self
+                .pending_file_operation
+                .as_ref()
+                .and_then(|operation| operation.source_path.file_name())
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            self.dialog = Some(Dialog::FileOperationName);
+            self.status = format!("Choose new name for {}", kind.label());
+            return;
+        }
+
         self.dialog = Some(Dialog::ConfirmFileOperation);
         self.status = format!("Confirm {}", kind.label());
     }
@@ -1137,6 +1192,48 @@ impl App {
         self.dialog = None;
         self.pending_new_directory_browser = None;
         self.new_directory_name.clear();
+    }
+
+    fn should_prompt_for_file_operation_name(&self) -> bool {
+        let Some(operation) = self.pending_file_operation.as_ref() else {
+            return false;
+        };
+
+        matches!(operation.kind, FileOperationKind::Copy | FileOperationKind::Move)
+            && operation.source_path.parent() == operation.target_path.as_deref().and_then(Path::parent)
+    }
+
+    fn confirm_file_operation_name(&mut self) {
+        let Some(operation) = self.pending_file_operation.as_mut() else {
+            self.dialog = None;
+            return;
+        };
+
+        let name = self.pending_file_operation_name.trim();
+        if name.is_empty() {
+            self.status = "File name cannot be empty".to_string();
+            return;
+        }
+        if name == "." || name == ".." || name.chars().any(std::path::is_separator) {
+            self.status = "File name must be a single path component".to_string();
+            return;
+        }
+
+        let Some(parent) = operation.target_path.as_deref().and_then(Path::parent) else {
+            self.clear_file_operation_request();
+            self.status = "File operation target is missing".to_string();
+            return;
+        };
+
+        operation.target_path = Some(parent.join(name));
+        self.dialog = Some(Dialog::ConfirmFileOperation);
+        self.status = format!("Confirm {}", operation.kind.label());
+    }
+
+    fn clear_file_operation_request(&mut self) {
+        self.dialog = None;
+        self.pending_file_operation = None;
+        self.pending_file_operation_name.clear();
     }
 
     fn confirm_pending_file_operation(&mut self) {
@@ -1189,8 +1286,7 @@ impl App {
         operation: PendingFileOperation,
         result: io::Result<()>,
     ) {
-        self.dialog = None;
-        self.pending_file_operation = None;
+        self.clear_file_operation_request();
 
         match result {
             Ok(()) => {
@@ -1198,9 +1294,23 @@ impl App {
                     self.refresh_browser_pane(browser_index);
                 }
                 self.assign_focus(Self::focus_for_browser_index(operation.browser_index));
+                if let Some(target_path) = operation.target_path.as_deref() {
+                    self.select_entry_for_path(operation.browser_index, target_path);
+                }
                 self.schedule_browser_preview();
                 self.status = match operation.kind {
                     FileOperationKind::Copy => format!("Copied {}", operation.source_path.display()),
+                    FileOperationKind::Move
+                        if operation.source_path.parent()
+                            == operation.target_path.as_deref().and_then(Path::parent) =>
+                    {
+                        let target = operation
+                            .target_path
+                            .as_deref()
+                            .map(|path| path.display().to_string())
+                            .unwrap_or_else(|| operation.source_path.display().to_string());
+                        format!("Renamed {} to {}", operation.source_path.display(), target)
+                    }
                     FileOperationKind::Move => format!("Moved {}", operation.source_path.display()),
                     FileOperationKind::Delete => format!("Deleted {}", operation.source_path.display()),
                 };
@@ -1480,11 +1590,20 @@ impl FileOperationKind {
         }
     }
 
-    fn title(self) -> &'static str {
+    fn confirm_title(self, source_parent: Option<&Path>, target_parent: Option<&Path>) -> &'static str {
         match self {
             FileOperationKind::Copy => "Copy selected entry?",
+            FileOperationKind::Move if source_parent == target_parent => "Rename selected entry?",
             FileOperationKind::Move => "Move selected entry?",
             FileOperationKind::Delete => "Delete selected entry?",
+        }
+    }
+
+    fn name_prompt_title(self) -> &'static str {
+        match self {
+            FileOperationKind::Copy => "Copy selected entry as",
+            FileOperationKind::Move => "Rename selected entry to",
+            FileOperationKind::Delete => "Delete selected entry",
         }
     }
 }

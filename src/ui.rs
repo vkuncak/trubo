@@ -147,6 +147,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             Dialog::About => draw_dialog(frame, app, dialog, centered(root, 60, 10)),
             Dialog::SaveFile => draw_dialog(frame, app, dialog, centered(root, 72, 10)),
             Dialog::NewDirectory => draw_dialog(frame, app, dialog, centered(root, 76, 12)),
+            Dialog::FileOperationName => draw_dialog(frame, app, dialog, centered(root, 76, 12)),
             Dialog::ConfirmFileOperation => {
                 draw_dialog(frame, app, dialog, centered(root, 76, 14))
             }
@@ -906,6 +907,7 @@ fn draw_dialog(frame: &mut Frame, app: &App, dialog: Dialog, area: Rect) {
         Dialog::About => draw_about_dialog(frame, area),
         Dialog::SaveFile => draw_save_file_dialog(frame, app, area),
         Dialog::NewDirectory => draw_new_directory_dialog(frame, app, area),
+        Dialog::FileOperationName => draw_file_operation_name_dialog(frame, app, area),
         Dialog::ConfirmFileOperation => draw_file_operation_dialog(frame, app, area),
     }
 }
@@ -1073,6 +1075,68 @@ fn draw_new_directory_dialog(frame: &mut Frame, app: &App, area: Rect) {
         .saturating_add(name.chars().count() as u16);
     let cursor_y = content_area.y.saturating_add(6);
     if cursor_x < content_area.x.saturating_add(content_area.width) && cursor_y < content_area.y.saturating_add(content_area.height) {
+        frame.set_cursor_position((cursor_x, cursor_y));
+    }
+}
+
+fn draw_file_operation_name_dialog(frame: &mut Frame, app: &App, area: Rect) {
+    let title = app
+        .pending_file_operation_prompt_title()
+        .unwrap_or("New file name");
+    let parent = app.pending_file_operation_parent().unwrap_or_default();
+    let name = app.pending_file_operation_name().unwrap_or_default();
+
+    let base = Style::default()
+        .fg(CURRENT_THEME.status_bar_fg)
+        .bg(CURRENT_THEME.dialog_background);
+    let accent = base.add_modifier(Modifier::BOLD);
+    let key = Style::default()
+        .fg(CURRENT_THEME.status_hotkey_fg)
+        .bg(CURRENT_THEME.dialog_background)
+        .add_modifier(Modifier::BOLD);
+
+    frame.render_widget(
+        Block::default().style(Style::default().bg(CURRENT_THEME.dialog_background)),
+        area,
+    );
+    let content_area = area.inner(Margin {
+        vertical: 0,
+        horizontal: 2,
+    });
+
+    let text = Text::from(vec![
+        Line::from(""),
+        Line::from(vec![Span::styled(title, key)]),
+        Line::from(""),
+        Line::from(vec![Span::styled("Directory:", accent)]),
+        Line::from(vec![Span::styled(parent, base)]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Name:", accent),
+            Span::styled(" ", base),
+            Span::styled(name.to_string(), base),
+        ]),
+        Line::from(""),
+        Line::from(vec![Span::styled("Enter", key), Span::styled(" = Continue", base)]),
+        Line::from(vec![Span::styled("Esc", key), Span::styled(" = Cancel", base)]),
+    ]);
+
+    frame.render_widget(
+        Paragraph::new(text)
+            .style(Style::default().bg(CURRENT_THEME.dialog_background))
+            .alignment(Alignment::Left)
+            .wrap(Wrap { trim: true }),
+        content_area,
+    );
+
+    let cursor_x = content_area
+        .x
+        .saturating_add("Name: ".chars().count() as u16)
+        .saturating_add(name.chars().count() as u16);
+    let cursor_y = content_area.y.saturating_add(6);
+    if cursor_x < content_area.x.saturating_add(content_area.width)
+        && cursor_y < content_area.y.saturating_add(content_area.height)
+    {
         frame.set_cursor_position((cursor_x, cursor_y));
     }
 }
