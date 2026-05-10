@@ -9,6 +9,7 @@ use std::{
 use std::process::Stdio;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use regex::Regex;
 use ratatui::layout::Rect;
 
 use crate::{
@@ -33,6 +34,7 @@ pub const MENUS: [Menu; 6] = [
             MenuItem::action("Copy", "Ctrl+C", MenuAction::Copy),
             MenuItem::action("Cut", "Ctrl+X", MenuAction::Cut),
             MenuItem::action("Paste", "Ctrl+V", MenuAction::Paste),
+            MenuItem::action("Search", "Ctrl+F", MenuAction::Search),
             MenuItem::separator(),
             MenuItem::action("Delete line", "Alt+X", MenuAction::DeleteLine),
             MenuItem::action("Duplicate line", "Alt+U", MenuAction::DuplicateLine),
@@ -115,6 +117,7 @@ pub enum MenuAction {
     Copy,
     Cut,
     Paste,
+    Search,
     CopyEntry,
     MoveEntry,
     NewDirectory,
@@ -154,6 +157,7 @@ pub enum Dialog {
     About,
     SaveFile,
     NewDirectory,
+    RegexSearch,
     FileOperationName,
     ConfirmFileOperation,
 }
@@ -235,6 +239,8 @@ pub struct App {
     pending_file_operation: Option<PendingFileOperation>,
     pending_file_operation_name: String,
     pending_file_operation_name_cursor: usize,
+    search_pattern: String,
+    search_pattern_cursor: usize,
     full_redraw_requested: bool,
     browser_preview_due_at: Option<Instant>,
     drag_target: Option<DragTarget>,
@@ -274,6 +280,8 @@ impl App {
             pending_file_operation: None,
             pending_file_operation_name: String::new(),
             pending_file_operation_name_cursor: 0,
+            search_pattern: String::new(),
+            search_pattern_cursor: 0,
             full_redraw_requested: false,
             browser_preview_due_at: None,
             drag_target: None,
@@ -469,6 +477,14 @@ impl App {
         } else {
             None
         }
+    }
+
+    pub fn search_pattern(&self) -> &str {
+        self.search_pattern.as_str()
+    }
+
+    pub fn search_pattern_cursor(&self) -> usize {
+        self.search_pattern_cursor
     }
 
     pub fn browser_label(&self, index: usize) -> String {
@@ -690,6 +706,49 @@ impl App {
                 }
                 _ => Action::None,
             },
+            Dialog::RegexSearch => match _key.code {
+                KeyCode::Enter => {
+                    self.confirm_regex_search();
+                    Action::None
+                }
+                KeyCode::Esc => {
+                    self.dialog = None;
+                    self.status = "Search cancelled".to_string();
+                    Action::None
+                }
+                KeyCode::Backspace => {
+                    self.delete_search_pattern_left();
+                    Action::None
+                }
+                KeyCode::Delete => {
+                    self.delete_search_pattern_right();
+                    Action::None
+                }
+                KeyCode::Left => {
+                    self.move_search_pattern_cursor_left();
+                    Action::None
+                }
+                KeyCode::Right => {
+                    self.move_search_pattern_cursor_right();
+                    Action::None
+                }
+                KeyCode::Home => {
+                    self.search_pattern_cursor = 0;
+                    Action::None
+                }
+                KeyCode::End => {
+                    self.search_pattern_cursor = self.search_pattern.chars().count();
+                    Action::None
+                }
+                KeyCode::Char(character)
+                    if !_key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !_key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    self.insert_search_pattern_char(character);
+                    Action::None
+                }
+                _ => Action::None,
+            },
             Dialog::FileOperationName => match _key.code {
                 KeyCode::Enter => {
                     self.confirm_file_operation_name();
@@ -869,6 +928,7 @@ impl App {
             MenuAction::Copy => self.copy_selection(),
             MenuAction::Cut => self.cut_selection(),
             MenuAction::Paste => self.paste_from_clipboard(),
+            MenuAction::Search => self.request_regex_search(),
             MenuAction::CopyEntry => self.request_copy_selected_entry(),
             MenuAction::MoveEntry => self.request_move_selected_entry(),
             MenuAction::NewDirectory => self.request_new_directory(),
@@ -969,6 +1029,14 @@ impl App {
         self.new_directory_name.clear();
         self.dialog = Some(Dialog::NewDirectory);
         self.status = format!("New sub-directory in {}", self.browser_label(browser_index));
+    }
+
+    pub fn request_regex_search(&mut self) {
+        self.close_menu();
+        self.assign_focus(Focus::Editor);
+        self.search_pattern_cursor = self.search_pattern.chars().count();
+        self.dialog = Some(Dialog::RegexSearch);
+        self.status = "Enter regular expression to search".to_string();
     }
 
     pub fn handle_mouse(&mut self, mouse: MouseEvent) -> Action {
@@ -1235,6 +1303,73 @@ impl App {
         self.dialog = None;
         self.pending_new_directory_browser = None;
         self.new_directory_name.clear();
+    }
+
+    fn confirm_regex_search(&mut self) {
+        if self.search_pattern.is_empty() {
+            self.status = "Search pattern cannot be empty".to_string();
+            return;
+        }
+
+        let regex = match Regex::new(&self.search_pattern) {
+            Ok(regex) => regex,
+            Err(error) => {
+                self.status = format!("Invalid regex: {error}");
+                return;
+            }
+        };
+
+        let Some((row, start_col, end_col)) = find_regex_match(
+            self.editor.lines(),
+            self.editor.cursor_row(),
+            self.editor.cursor_col(),
+            &regex,
+        ) else {
+            self.status = format!("No match for /{}/", self.search_pattern);
+            return;
+        };
+
+        self.dialog = None;
+        self.assign_focus(Focus::Editor);
+        self.editor.set_cursor(row, start_col);
+        self.editor.begin_selection();
+        self.editor.select_to(row, end_col);
+        self.status = format!("Found /{}/ at {}:{}", self.search_pattern, row + 1, start_col + 1);
+    }
+
+    fn insert_search_pattern_char(&mut self, character: char) {
+        let byte_index = char_to_byte_index(&self.search_pattern, self.search_pattern_cursor);
+        self.search_pattern.insert(byte_index, character);
+        self.search_pattern_cursor += 1;
+    }
+
+    fn delete_search_pattern_left(&mut self) {
+        if self.search_pattern_cursor == 0 {
+            return;
+        }
+
+        let remove_at = self.search_pattern_cursor - 1;
+        let byte_index = char_to_byte_index(&self.search_pattern, remove_at);
+        self.search_pattern.remove(byte_index);
+        self.search_pattern_cursor = remove_at;
+    }
+
+    fn delete_search_pattern_right(&mut self) {
+        if self.search_pattern_cursor >= self.search_pattern.chars().count() {
+            return;
+        }
+
+        let byte_index = char_to_byte_index(&self.search_pattern, self.search_pattern_cursor);
+        self.search_pattern.remove(byte_index);
+    }
+
+    fn move_search_pattern_cursor_left(&mut self) {
+        self.search_pattern_cursor = self.search_pattern_cursor.saturating_sub(1);
+    }
+
+    fn move_search_pattern_cursor_right(&mut self) {
+        let len = self.search_pattern.chars().count();
+        self.search_pattern_cursor = (self.search_pattern_cursor + 1).min(len);
     }
 
     fn should_prompt_for_file_operation_name(&self) -> bool {
@@ -1761,6 +1896,63 @@ fn char_to_byte_index(value: &str, char_index: usize) -> usize {
         .nth(char_index)
         .map(|(byte_index, _)| byte_index)
         .unwrap_or(value.len())
+}
+
+fn byte_to_char_index(value: &str, byte_index: usize) -> usize {
+    value[..byte_index].chars().count()
+}
+
+fn find_regex_match(
+    lines: &[String],
+    start_row: usize,
+    start_col: usize,
+    regex: &Regex,
+) -> Option<(usize, usize, usize)> {
+    if lines.is_empty() {
+        return None;
+    }
+
+    let start_row = start_row.min(lines.len() - 1);
+    for row in start_row..lines.len() {
+        let row_start = if row == start_row { start_col } else { 0 };
+        if let Some((match_start, match_end)) = find_regex_match_in_line(&lines[row], row_start, None, regex) {
+            return Some((row, match_start, match_end));
+        }
+    }
+
+    for row in 0..=start_row {
+        let row_end = if row == start_row { Some(start_col) } else { None };
+        if let Some((match_start, match_end)) = find_regex_match_in_line(&lines[row], 0, row_end, regex) {
+            return Some((row, match_start, match_end));
+        }
+    }
+
+    None
+}
+
+fn find_regex_match_in_line(
+    line: &str,
+    start_col: usize,
+    end_col: Option<usize>,
+    regex: &Regex,
+) -> Option<(usize, usize)> {
+    let start_byte = char_to_byte_index(line, start_col);
+    let end_byte = end_col
+        .map(|column| char_to_byte_index(line, column))
+        .unwrap_or(line.len());
+
+    if start_byte >= end_byte {
+        return None;
+    }
+
+    let haystack = &line[start_byte..end_byte];
+    let matched = regex.find_iter(haystack).find(|matched| matched.start() != matched.end())?;
+    let match_start = start_byte + matched.start();
+    let match_end = start_byte + matched.end();
+    Some((
+        byte_to_char_index(line, match_start),
+        byte_to_char_index(line, match_end),
+    ))
 }
 
 fn shell_quote(path: &Path) -> String {

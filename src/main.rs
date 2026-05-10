@@ -189,7 +189,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
             KeyCode::Char('s') | KeyCode::Char('S') => {
                 app.save_current();
             }
-            KeyCode::Char('f') | KeyCode::Char('F') => app.toggle_focus(),
+            KeyCode::Char('f') | KeyCode::Char('F') => app.request_regex_search(),
             KeyCode::Char('o') | KeyCode::Char('O') => app.open_selected_file(),
             KeyCode::Char('r') | KeyCode::Char('R') => app.run_current_target(),
             KeyCode::Char('b') | KeyCode::Char('B') => app.build_current_target(),
