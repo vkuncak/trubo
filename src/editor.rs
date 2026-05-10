@@ -165,6 +165,10 @@ impl Editor {
         Some((start, end))
     }
 
+    pub fn has_selection(&self) -> bool {
+        self.selection_bounds().is_some()
+    }
+
     pub fn selection_range_for_line(&self, row: usize) -> Option<(usize, usize)> {
         let (start, end) = self.selection_bounds()?;
         if row < start.row || row > end.row {
@@ -348,7 +352,7 @@ impl Editor {
     }
 
     pub fn backspace(&mut self) {
-        if self.selection_bounds().is_none() && self.cursor_col == 0 && self.cursor_row == 0 {
+        if !self.has_selection() && self.cursor_col == 0 && self.cursor_row == 0 {
             self.keep_cursor_visible();
             return;
         }
@@ -374,7 +378,7 @@ impl Editor {
     }
 
     pub fn delete(&mut self) {
-        if self.selection_bounds().is_none()
+        if !self.has_selection()
             && self.cursor_col >= self.line_len(self.cursor_row)
             && self.cursor_row + 1 >= self.lines.len()
         {
