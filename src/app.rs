@@ -1296,28 +1296,22 @@ impl App {
             return;
         }
 
+        let file_name = entry
+            .path
+            .file_name()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(&entry.label));
         let target_path = match kind {
             FileOperationKind::Delete => None,
             FileOperationKind::Copy => {
-                if !self.secondary_browser_enabled {
-                    self.status = "Enable second files pane to choose copy target".to_string();
-                    return;
-                }
-
-                let file_name = entry
-                    .path
-                    .file_name()
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| PathBuf::from(&entry.label));
-                let target_index = 1 - browser_index;
-                Some(self.browsers[target_index].dir.join(file_name))
+                let target_dir = if self.secondary_browser_enabled {
+                    self.browsers[1 - browser_index].dir.clone()
+                } else {
+                    self.browsers[browser_index].dir.clone()
+                };
+                Some(target_dir.join(&file_name))
             }
             FileOperationKind::Move => {
-                let file_name = entry
-                    .path
-                    .file_name()
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| PathBuf::from(&entry.label));
                 let target_dir = if self.secondary_browser_enabled {
                     self.browsers[1 - browser_index].dir.clone()
                 } else {
@@ -1462,6 +1456,10 @@ impl App {
         };
 
         let target_path = parent.join(name);
+        if operation.kind == FileOperationKind::Copy && target_path == operation.source_path {
+            self.status = "Copy name must be changed".to_string();
+            return;
+        }
         if let Some(operation) = self.pending_file_operation.as_mut() {
             operation.target_path = Some(target_path);
         }
