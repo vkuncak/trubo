@@ -150,7 +150,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             Dialog::About => draw_dialog(frame, app, dialog, centered(root, 60, 10)),
             Dialog::SaveFile => draw_dialog(frame, app, dialog, centered(root, 72, 10)),
             Dialog::NewDirectory => draw_dialog(frame, app, dialog, centered(root, 76, 12)),
-            Dialog::RegexSearch => draw_dialog(frame, app, dialog, centered(root, 76, 12)),
+            Dialog::RegexSearch => {
+                draw_dialog(frame, app, dialog, anchored_search_area(app, root, 48, 5))
+            }
             Dialog::FileOperationName => {
                 draw_dialog(frame, app, dialog, anchored_file_operation_area(app, root, 42, 5))
             }
@@ -1038,16 +1040,51 @@ fn draw_new_directory_dialog(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_regex_search_dialog(frame: &mut Frame, app: &App, area: Rect) {
-    draw_text_input_dialog(
-        frame,
-        area,
-        "Regular expression search",
-        None,
-        "Pattern:",
-        app.search_pattern(),
-        app.search_pattern_cursor(),
-        "Find next match",
+    let pattern = app.search_pattern();
+    let base = Style::default()
+        .fg(CURRENT_THEME.status_bar_fg)
+        .bg(CURRENT_THEME.dialog_background);
+    let accent = base.add_modifier(Modifier::BOLD);
+    let key = Style::default()
+        .fg(CURRENT_THEME.status_hotkey_fg)
+        .bg(CURRENT_THEME.dialog_background)
+        .add_modifier(Modifier::BOLD);
+
+    let content_area = draw_compact_dialog_shell(frame, area);
+
+    let lines = vec![
+        Line::from(vec![Span::styled("Regular expression search", key)]),
+        Line::from(vec![
+            Span::styled("Pattern:", accent),
+            Span::styled(" ", base),
+            Span::styled(pattern.to_string(), base),
+        ]),
+        Line::from(vec![
+            Span::styled("Enter", key),
+            Span::styled(" find next  ", base),
+            Span::styled("Esc", key),
+            Span::styled(" cancel", base),
+        ]),
+    ];
+
+    frame.render_widget(
+        Paragraph::new(Text::from(lines))
+            .style(Style::default().bg(CURRENT_THEME.dialog_background))
+            .alignment(Alignment::Left)
+            .wrap(Wrap { trim: true }),
+        content_area,
     );
+
+    let cursor_x = content_area
+        .x
+        .saturating_add("Pattern: ".chars().count() as u16)
+        .saturating_add(app.search_pattern_cursor() as u16);
+    let cursor_y = content_area.y.saturating_add(1);
+    if cursor_x < content_area.x.saturating_add(content_area.width)
+        && cursor_y < content_area.y.saturating_add(content_area.height)
+    {
+        frame.set_cursor_position((cursor_x, cursor_y));
+    }
 }
 
 fn draw_file_operation_name_dialog(frame: &mut Frame, app: &App, area: Rect) {
@@ -1243,6 +1280,14 @@ fn anchored_file_operation_area(app: &App, root: Rect, width: u16, height: u16) 
     placed_rect_near(root, anchor_x, preferred_y, width, height)
 }
 
+fn anchored_search_area(app: &App, root: Rect, width: u16, height: u16) -> Rect {
+    let Some((cursor_x, cursor_y)) = editor_cursor_screen_position(app) else {
+        return centered(root, width, height);
+    };
+
+    placed_rect_near(root, cursor_x.saturating_add(1), cursor_y, width, height)
+}
+
 fn confirm_file_operation_dialog_height(app: &App) -> u16 {
     let has_target = app
         .pending_file_operation_paths()
@@ -1253,6 +1298,49 @@ fn confirm_file_operation_dialog_height(app: &App) -> u16 {
 
 fn draw_compact_dialog_shell(frame: &mut Frame, area: Rect) -> Rect {
     draw_dialog_shell(frame, area)
+}
+
+fn editor_cursor_screen_position(app: &App) -> Option<(u16, u16)> {
+    let inner = app.geometry.editor_inner;
+    if inner.width == 0 || inner.height == 0 {
+        return None;
+    }
+
+    let line_number_width = app.editor_line_number_width();
+    let text_cols = inner.width.saturating_sub(line_number_width + 1).max(1) as usize;
+    let row_offset = app.editor.row_offset();
+    let cursor_segment = app.editor.cursor_col() / text_cols;
+    let cursor_x = inner.x + line_number_width + (app.editor.cursor_col() % text_cols) as u16;
+    let mut visual_from_top = 0usize;
+
+    if app.editor.cursor_row() == row_offset {
+        visual_from_top = cursor_segment.saturating_sub(app.editor.row_segment_offset());
+    } else if app.editor.cursor_row() > row_offset {
+        let first_wrapped = app
+            .editor
+            .lines()
+            .get(row_offset)
+            .map(|line| wrapped_rows(line.chars().count(), text_cols))
+            .unwrap_or(1);
+        visual_from_top += first_wrapped.saturating_sub(app.editor.row_segment_offset());
+        visual_from_top += app
+            .editor
+            .lines()
+            .iter()
+            .enumerate()
+            .skip(row_offset + 1)
+            .take(app.editor.cursor_row().saturating_sub(row_offset + 1))
+            .map(|(_, line)| wrapped_rows(line.chars().count(), text_cols))
+            .sum::<usize>();
+        visual_from_top += cursor_segment;
+    }
+
+    let cursor_y = inner.y + visual_from_top as u16;
+    if cursor_x < inner.x + inner.width && cursor_y < inner.y + inner.height {
+        Some((cursor_x, cursor_y))
+    } else {
+        None
+    }
 }
 
 fn draw_dialog_shell(frame: &mut Frame, area: Rect) -> Rect {

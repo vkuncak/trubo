@@ -444,6 +444,11 @@ impl App {
             return;
         };
 
+        if entry.kind == ProjectEntryKind::Parent {
+            self.status = "Directory Up".to_string();
+            return;
+        }
+
         if entry.kind == ProjectEntryKind::Directory {
             let preview_label = format!("{} [tree]", entry.path.display());
             if self.preview_label.as_deref() == Some(preview_label.as_str()) {
@@ -1320,7 +1325,6 @@ impl App {
             return;
         };
 
-        self.dialog = None;
         self.assign_focus(Focus::Editor);
         self.search_pattern = pattern.clone();
         self.editor.set_cursor(row, start_col);
