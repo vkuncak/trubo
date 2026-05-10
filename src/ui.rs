@@ -93,8 +93,9 @@ const SECONDARY_BROWSER_HEADER_BINDINGS: [(&str, &str); 4] = [
     ("F7", " MkDir  "),
     ("F8", " Delete "),
 ];
-const PRIMARY_HEADER_BINDINGS: [(&str, &str); 4] = [
+const PRIMARY_HEADER_BINDINGS: [(&str, &str); 5] = [
     ("F1", " Help  "),
+    ("Ctrl-B", " Side  "),
     ("`", " Dual "),
     ("F4", " Pane  "),
     ("F10", " Menu"),
@@ -447,14 +448,21 @@ fn draw_desktop(frame: &mut Frame, area: Rect, app: &mut App) {
         horizontal: 0,
         vertical: 0,
     });
+    app.geometry.desktop_inner = desktop;
+    app.geometry.browser_areas = [Rect::default(); 2];
+    app.geometry.browser_inners = [Rect::default(); 2];
+
+    if app.editor_only_mode {
+        app.geometry.editor_area = desktop;
+        draw_editor(frame, desktop, app);
+        return;
+    }
+
     app.browser_pane_width = clamp_browser_width(
         desktop.width,
         app.browser_pane_width,
         app.visible_browser_count() as u16,
     );
-    app.geometry.desktop_inner = desktop;
-    app.geometry.browser_areas = [Rect::default(); 2];
-    app.geometry.browser_inners = [Rect::default(); 2];
 
     if app.secondary_browser_enabled {
         let columns = Layout::default()
@@ -852,7 +860,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         help_bindings_line(&[("F5", "Copy entry"), ("F6", "Move entry"), ("F7", "New sub-directory")]),
         help_bindings_line(&[("F8", "Delete entry"), ("F9", "Build current file"), ("Ctrl+Q", "Quit")]),
         help_bindings_line(&[("Ctrl+S", "Save"), ("Ctrl+O", "Open selected file"), ("Ctrl+F", "Regex search")]),
-        help_bindings_line(&[("Ctrl+L", "Redraw screen"), ("Ctrl+R", "Run current file"), ("Ctrl+B", "Build current file")]),
+        help_bindings_line(&[("Ctrl+L", "Redraw screen"), ("Ctrl+R", "Run current file"), ("Ctrl+B", "Editor only")]),
         help_bindings_line(&[("`", "Toggle dual pane")]),
         help_bindings_line(&[("Ctrl+Space", "Toggle select mode")]),
         help_bindings_line(&[("Ctrl+C", "Copy"), ("Ctrl+X", "Cut"), ("Ctrl+V", "Paste"), ("Ctrl+Z", "Undo")]),

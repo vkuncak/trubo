@@ -48,6 +48,7 @@ pub const MENUS: [Menu; 6] = [
             MenuItem::action("Files pane", "", MenuAction::FocusBrowser),
             MenuItem::action("Editor pane", "", MenuAction::FocusEditor),
             MenuItem::action("Toggle Dual Pane", "`", MenuAction::ToggleDualPane),
+            MenuItem::action("Editor Only", "Ctrl+B", MenuAction::ToggleEditorOnly),
             MenuItem::separator(),
             MenuItem::action("Next pane", "F4", MenuAction::ToggleFocus),
         ],
@@ -132,6 +133,7 @@ pub enum MenuAction {
     CargoBuild,
     ToggleFocus,
     ToggleDualPane,
+    ToggleEditorOnly,
     FocusBrowser,
     FocusEditor,
     Help,
@@ -295,6 +297,7 @@ impl BrowserPane {
 pub struct App {
     pub browsers: [BrowserPane; BROWSER_PANE_COUNT],
     pub secondary_browser_enabled: bool,
+    pub editor_only_mode: bool,
     pub editor: Editor,
     pub focus: Focus,
     pub menu_open: bool,
@@ -335,6 +338,7 @@ impl App {
                 BrowserPane::new(browser_dir),
             ],
             secondary_browser_enabled: false,
+            editor_only_mode: false,
             editor: Editor::scratch(),
             focus: Focus::BrowserPrimary,
             menu_open: false,
@@ -366,6 +370,11 @@ impl App {
 
     pub fn toggle_focus(&mut self) {
         self.close_menu();
+        if self.editor_only_mode {
+            self.assign_focus(Focus::Editor);
+            self.status = "Focus: Edit".to_string();
+            return;
+        }
         let focus = match self.focus {
             Focus::BrowserPrimary if self.secondary_browser_enabled => Focus::BrowserSecondary,
             Focus::BrowserPrimary => Focus::Editor,
@@ -389,7 +398,7 @@ impl App {
 
     fn set_focus(&mut self, focus: Focus) {
         self.close_menu();
-        self.assign_focus(focus);
+        self.assign_focus(if self.editor_only_mode { Focus::Editor } else { focus });
         if self.focus_browser_index().is_some() {
             self.schedule_browser_preview();
         }
@@ -405,15 +414,27 @@ impl App {
         if self.secondary_browser_enabled {
             self.browsers[0] = self.browsers[1].clone();
             self.secondary_browser_enabled = false;
-            self.assign_focus(Focus::BrowserPrimary);
+            self.assign_focus(if self.editor_only_mode { Focus::Editor } else { Focus::BrowserPrimary });
             self.status = format!("Files pane: {}", self.browsers[0].dir.display());
         } else {
             self.browsers[1] = self.browsers[0].clone();
             self.secondary_browser_enabled = true;
-            self.assign_focus(Focus::BrowserSecondary);
+            self.assign_focus(if self.editor_only_mode { Focus::Editor } else { Focus::BrowserSecondary });
             self.status = format!("Second files pane: {}", self.browsers[1].dir.display());
         }
         self.schedule_browser_preview();
+    }
+
+    pub fn toggle_editor_only_mode(&mut self) {
+        self.close_menu();
+        self.help_open = false;
+        self.editor_only_mode = !self.editor_only_mode;
+        self.assign_focus(Focus::Editor);
+        self.status = if self.editor_only_mode {
+            "Editor only mode enabled".to_string()
+        } else {
+            "Editor only mode disabled".to_string()
+        };
     }
 
     pub fn request_full_redraw(&mut self) {
@@ -941,6 +962,7 @@ impl App {
             MenuAction::CargoBuild => self.build_current_target(),
             MenuAction::ToggleFocus => self.toggle_focus(),
             MenuAction::ToggleDualPane => self.toggle_secondary_browser(),
+            MenuAction::ToggleEditorOnly => self.toggle_editor_only_mode(),
             MenuAction::FocusBrowser => self.set_focus(Focus::BrowserPrimary),
             MenuAction::FocusEditor => self.set_focus(Focus::Editor),
             MenuAction::Help => self.help_open = true,
@@ -1709,6 +1731,10 @@ impl App {
     }
 
     fn focus_browser_index(&self) -> Option<usize> {
+        if self.editor_only_mode {
+            return None;
+        }
+
         match self.focus {
             Focus::BrowserPrimary => Some(0),
             Focus::BrowserSecondary if self.secondary_browser_enabled => Some(1),
