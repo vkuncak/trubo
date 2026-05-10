@@ -1270,20 +1270,13 @@ fn confirm_file_operation_dialog_height(app: &App) -> u16 {
 
 fn draw_compact_dialog_shell(frame: &mut Frame, area: Rect) -> Rect {
     frame.render_widget(
-        Block::default()
-            .borders(Borders::ALL)
-            .style(Style::default().bg(CURRENT_THEME.dialog_background))
-            .border_style(
-                Style::default()
-                    .fg(CURRENT_THEME.panel_text_muted)
-                    .bg(CURRENT_THEME.app_background),
-            ),
+        Block::default().style(Style::default().bg(CURRENT_THEME.dialog_background)),
         area,
     );
 
     area.inner(Margin {
-        vertical: 1,
-        horizontal: 1,
+        vertical: 0,
+        horizontal: 0,
     })
 }
 
