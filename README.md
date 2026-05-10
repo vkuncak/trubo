@@ -63,6 +63,10 @@ For the full guide, see [doc/GUIDE.md](doc/GUIDE.md).
 
 ## Notes
 
+Only one file can be edited at a time.
+
+File backups are saved using the `~` suffix.
+
 The file pane lists directories and all regular files. trubo opens files as
 lossy text regardless of extension.
 

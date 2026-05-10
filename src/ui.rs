@@ -1013,22 +1013,22 @@ fn draw_save_file_dialog(frame: &mut Frame, app: &App, area: Rect) {
 
     let text = Text::from(vec![
         Line::from(""),
-        Line::from(vec![Span::styled("Save File Before Exiting?", key)]),
+        Line::from(vec![Span::styled(app.save_file_dialog_title(), key)]),
         Line::from(""),
         Line::from(vec![Span::styled(path, base)]),
         Line::from(vec![Span::styled(file_name, file_style)]),
         Line::from(""),
         Line::from(vec![
             Span::styled("Y", key),
-            Span::styled(" = Save and exit", base),
+            Span::styled(app.save_file_dialog_yes_label(), base),
         ]),
         Line::from(vec![
             Span::styled("N", key),
-            Span::styled(" = Exit without saving, changes lost!", base),
+            Span::styled(app.save_file_dialog_no_label(), base),
         ]),
         Line::from(vec![
             Span::styled("Esc", key),
-            Span::styled(" = Stay in application and continue editing", base),
+            Span::styled(app.save_file_dialog_cancel_label(), base),
         ]),
     ]);
 

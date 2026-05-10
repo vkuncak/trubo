@@ -169,6 +169,13 @@ pub enum Dialog {
     ConfirmFileOperation,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PendingUnsavedAction {
+    Quit,
+    Focus(Focus),
+    OpenPath(PathBuf),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FileOperationKind {
     Copy,
@@ -310,6 +317,7 @@ pub struct App {
     pub browser_pane_width: u16,
     pub geometry: Geometry,
     preview_label: Option<String>,
+    pending_unsaved_action: Option<PendingUnsavedAction>,
     pending_new_directory_browser: Option<usize>,
     new_directory_input: TextInputState,
     pending_file_operation: Option<PendingFileOperation>,
@@ -351,6 +359,7 @@ impl App {
             browser_pane_width: 30,
             geometry: Geometry::default(),
             preview_label: None,
+            pending_unsaved_action: None,
             pending_new_directory_browser: None,
             new_directory_input: TextInputState::default(),
             pending_file_operation: None,
@@ -381,11 +390,7 @@ impl App {
             Focus::BrowserSecondary => Focus::BrowserPrimary,
             Focus::Editor => Focus::BrowserPrimary,
         };
-        self.assign_focus(focus);
-        if self.focus_browser_index().is_some() {
-            self.schedule_browser_preview();
-        }
-        self.status = format!("Focus: {}", self.focus_name());
+        self.set_focus(focus);
     }
 
     pub fn focus_browser(&mut self) {
@@ -398,7 +403,16 @@ impl App {
 
     fn set_focus(&mut self, focus: Focus) {
         self.close_menu();
-        self.assign_focus(if self.editor_only_mode { Focus::Editor } else { focus });
+        let focus = if self.editor_only_mode { Focus::Editor } else { focus };
+        if self.focus == Focus::Editor && focus != Focus::Editor && self.editor.is_dirty() {
+            self.request_unsaved_action(PendingUnsavedAction::Focus(focus));
+            return;
+        }
+        self.apply_focus_change(focus);
+    }
+
+    fn apply_focus_change(&mut self, focus: Focus) {
+        self.assign_focus(focus);
         if self.focus_browser_index().is_some() {
             self.schedule_browser_preview();
         }
@@ -526,6 +540,42 @@ impl App {
             .unwrap_or_else(|| "Untitled".to_string())
     }
 
+    pub fn save_file_dialog_title(&self) -> &'static str {
+        match self.pending_unsaved_action.as_ref() {
+            Some(PendingUnsavedAction::Quit) => "Save File Before Exiting?",
+            Some(PendingUnsavedAction::Focus(_)) => "Save File Before Changing Pane?",
+            Some(PendingUnsavedAction::OpenPath(_)) => "Save File Before Opening Another File?",
+            None => "Save File?",
+        }
+    }
+
+    pub fn save_file_dialog_yes_label(&self) -> &'static str {
+        match self.pending_unsaved_action.as_ref() {
+            Some(PendingUnsavedAction::Quit) => " = Save and exit",
+            Some(PendingUnsavedAction::Focus(_)) => " = Save and change pane",
+            Some(PendingUnsavedAction::OpenPath(_)) => " = Save and open file",
+            None => " = Save",
+        }
+    }
+
+    pub fn save_file_dialog_no_label(&self) -> &'static str {
+        match self.pending_unsaved_action.as_ref() {
+            Some(PendingUnsavedAction::Quit) => " = Exit without saving, changes lost!",
+            Some(PendingUnsavedAction::Focus(_)) => " = Change pane without saving",
+            Some(PendingUnsavedAction::OpenPath(_)) => " = Open without saving, changes lost!",
+            None => " = Continue without saving",
+        }
+    }
+
+    pub fn save_file_dialog_cancel_label(&self) -> &'static str {
+        match self.pending_unsaved_action.as_ref() {
+            Some(PendingUnsavedAction::Quit) => " = Stay in application and continue editing",
+            Some(PendingUnsavedAction::Focus(_)) => " = Stay in editor and continue editing",
+            Some(PendingUnsavedAction::OpenPath(_)) => " = Stay on current file and continue editing",
+            None => " = Continue editing",
+        }
+    }
+
     pub fn pending_file_operation_title(&self) -> Option<&'static str> {
         let operation = self.pending_file_operation.as_ref()?;
         Some(operation.kind.confirm_title(operation.source_path.parent(), operation.target_path.as_deref().and_then(Path::parent)))
@@ -612,6 +662,15 @@ impl App {
     }
 
     pub fn open_path(&mut self, path: PathBuf) {
+        if self.editor.is_dirty() {
+            self.request_unsaved_action(PendingUnsavedAction::OpenPath(path));
+            return;
+        }
+
+        self.apply_open_path(path);
+    }
+
+    fn apply_open_path(&mut self, path: PathBuf) {
         match Editor::open(&path) {
             Ok(editor) => {
                 self.editor = editor;
@@ -637,6 +696,7 @@ impl App {
         self.close_menu();
         match self.editor.save() {
             Ok(SaveOutcome::Saved) => {
+                self.refresh_buffers_after_save();
                 self.status = format!("Saved {}", self.current_file_label());
                 true
             }
@@ -765,17 +825,12 @@ impl App {
                 Action::None
             }
             Dialog::SaveFile => match _key.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') => {
-                    if self.save_current() {
-                        Action::Quit
-                    } else {
-                        Action::None
-                    }
-                }
-                KeyCode::Char('n') | KeyCode::Char('N') => Action::Quit,
+                KeyCode::Char('y') | KeyCode::Char('Y') => self.confirm_save_file_dialog(true),
+                KeyCode::Char('n') | KeyCode::Char('N') => self.confirm_save_file_dialog(false),
                 KeyCode::Esc => {
                     self.dialog = None;
-                    self.status = "Exit cancelled".to_string();
+                    self.pending_unsaved_action = None;
+                    self.status = "Action cancelled".to_string();
                     Action::None
                 }
                 _ => Action::None,
@@ -836,8 +891,7 @@ impl App {
         self.help_open = false;
 
         if self.editor.is_dirty() {
-            self.dialog = Some(Dialog::SaveFile);
-            self.status = format!("Save file before exit: {}", self.current_file_label());
+            self.request_unsaved_action(PendingUnsavedAction::Quit);
             return Action::None;
         }
 
@@ -1596,6 +1650,22 @@ impl App {
         self.browsers[browser_index].selected_entry = index;
     }
 
+    fn refresh_buffers_after_save(&mut self) {
+        let saved_path = self.editor.path().map(Path::to_path_buf);
+
+        for browser_index in 0..BROWSER_PANE_COUNT {
+            self.refresh_browser_pane(browser_index);
+            if let Some(path) = saved_path.as_deref() {
+                self.select_entry_for_path(browser_index, path);
+            }
+        }
+
+        if self.focus_browser_index().is_some() {
+            self.schedule_browser_preview();
+        }
+        self.request_full_redraw();
+    }
+
     fn schedule_browser_preview(&mut self) {
         self.browser_preview_due_at = Some(Instant::now() + BROWSER_PREVIEW_DELAY);
     }
@@ -1684,6 +1754,37 @@ impl App {
         }
 
         None
+    }
+
+    fn request_unsaved_action(&mut self, action: PendingUnsavedAction) {
+        let action_label = match &action {
+            PendingUnsavedAction::Quit => "exit",
+            PendingUnsavedAction::Focus(_) => "change pane",
+            PendingUnsavedAction::OpenPath(_) => "open another file",
+        };
+        self.pending_unsaved_action = Some(action);
+        self.dialog = Some(Dialog::SaveFile);
+        self.status = format!("Save file before {action_label}: {}", self.current_file_label());
+    }
+
+    fn confirm_save_file_dialog(&mut self, save: bool) -> Action {
+        if save && !self.save_current() {
+            return Action::None;
+        }
+
+        self.dialog = None;
+        match self.pending_unsaved_action.take() {
+            Some(PendingUnsavedAction::Quit) => Action::Quit,
+            Some(PendingUnsavedAction::Focus(focus)) => {
+                self.apply_focus_change(focus);
+                Action::None
+            }
+            Some(PendingUnsavedAction::OpenPath(path)) => {
+                self.apply_open_path(path);
+                Action::None
+            }
+            None => Action::None,
+        }
     }
 
     fn resize_browser_pane(&mut self, divider_index: usize, column: u16) {
@@ -2057,6 +2158,100 @@ fn item_index_for_hotkey(menu_index: usize, character: char) -> Option<usize> {
                 .next()
                 .is_some_and(|candidate| candidate.to_ascii_lowercase() == needle)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        env, fs,
+        path::PathBuf,
+        process,
+        sync::atomic::{AtomicU64, Ordering},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use super::{Action, App, Dialog, Focus, PendingUnsavedAction};
+
+    static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    struct TestDir {
+        path: PathBuf,
+    }
+
+    impl TestDir {
+        fn new() -> Self {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock before unix epoch")
+                .as_nanos();
+            let counter = TEMP_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let path = env::temp_dir().join(format!(
+                "trubo-app-tests-{}-{unique}-{counter}",
+                process::id()
+            ));
+            fs::create_dir_all(&path).expect("create temp test directory");
+            Self { path }
+        }
+
+        fn path(&self) -> &PathBuf {
+            &self.path
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn dirty_focus_change_prompts_to_save() {
+        let test_dir = TestDir::new();
+        let path = test_dir.path().join("demo.txt");
+        fs::write(&path, "hello").expect("write test file");
+
+        let mut app = App::new(test_dir.path().to_path_buf());
+        app.refresh_browser();
+        app.open_path(path);
+        app.editor.insert_char('!');
+
+        app.focus_browser();
+
+        assert_eq!(app.dialog, Some(Dialog::SaveFile));
+        assert_eq!(app.focus, Focus::Editor);
+        assert!(matches!(
+            app.pending_unsaved_action,
+            Some(PendingUnsavedAction::Focus(Focus::BrowserPrimary))
+        ));
+    }
+
+    #[test]
+    fn confirming_open_without_saving_replaces_dirty_buffer() {
+        let test_dir = TestDir::new();
+        let first = test_dir.path().join("first.txt");
+        let second = test_dir.path().join("second.txt");
+        fs::write(&first, "alpha").expect("write first file");
+        fs::write(&second, "beta").expect("write second file");
+
+        let mut app = App::new(test_dir.path().to_path_buf());
+        app.refresh_browser();
+        app.open_path(first.clone());
+        app.editor.insert_char('!');
+
+        app.open_path(second.clone());
+
+        assert_eq!(app.dialog, Some(Dialog::SaveFile));
+        assert!(matches!(
+            app.pending_unsaved_action,
+            Some(PendingUnsavedAction::OpenPath(ref path)) if path == &second
+        ));
+        assert_eq!(app.confirm_save_file_dialog(false), Action::None);
+        assert_eq!(app.dialog, None);
+        assert_eq!(app.pending_unsaved_action, None);
+        assert_eq!(app.editor.path(), Some(second.as_path()));
+        assert_eq!(app.editor.lines(), &["beta".to_string()]);
+        assert!(!app.editor.is_dirty());
+    }
 }
 
 fn menu_bar_index_at(menu: &MenuGeometry, column: u16, row: u16) -> Option<usize> {

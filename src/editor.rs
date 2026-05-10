@@ -102,13 +102,7 @@ impl Editor {
     }
 
     pub fn open(path: &Path) -> io::Result<Self> {
-        let bytes = fs::read(path)?;
-        let binary_size = is_binary_bytes(&bytes).then_some(bytes.len() as u64);
-        let content = String::from_utf8_lossy(&bytes).into_owned();
-        let mut lines: Vec<String> = content.lines().map(ToString::to_string).collect();
-        if content.ends_with('\n') || lines.is_empty() {
-            lines.push(String::new());
-        }
+        let (lines, binary_size) = read_buffer_from_path(path)?;
 
         Ok(Self {
             path: Some(path.to_path_buf()),
@@ -142,8 +136,7 @@ impl Editor {
         }
 
         fs::write(path, self.lines.join("\n"))?;
-        self.dirty = false;
-        self.binary_size = None;
+        self.refresh_from_disk()?;
         Ok(SaveOutcome::Saved)
     }
 
@@ -711,6 +704,34 @@ impl Editor {
         }
     }
 
+    fn refresh_from_disk(&mut self) -> io::Result<()> {
+        let Some(path) = self.path.clone() else {
+            return Err(io::Error::other("scratch buffer has no path"));
+        };
+
+        let cursor = self.current_position();
+        let selection_anchor = self.selection_anchor;
+        let row_offset = self.row_offset;
+        let row_segment_offset = self.row_segment_offset;
+        let col_offset = self.col_offset;
+
+        let (lines, binary_size) = read_buffer_from_path(&path)?;
+        self.lines = lines;
+        self.binary_size = binary_size;
+        self.dirty = false;
+
+        self.set_cursor_position(self.clamp_position(cursor));
+        self.selection_anchor = selection_anchor.map(|anchor| self.clamp_position(anchor));
+        if self.selection_anchor == Some(self.current_position()) {
+            self.clear_selection();
+        }
+        self.row_offset = row_offset;
+        self.row_segment_offset = row_segment_offset;
+        self.col_offset = col_offset;
+        self.keep_cursor_visible();
+        Ok(())
+    }
+
     fn current_position(&self) -> Position {
         Position {
             row: self.cursor_row,
@@ -791,6 +812,17 @@ fn wrapped_rows(line_len: usize, cols: usize) -> usize {
         return 1;
     }
     line_len.max(1).div_ceil(cols)
+}
+
+fn read_buffer_from_path(path: &Path) -> io::Result<(Vec<String>, Option<u64>)> {
+    let bytes = fs::read(path)?;
+    let binary_size = is_binary_bytes(&bytes).then_some(bytes.len() as u64);
+    let content = String::from_utf8_lossy(&bytes).into_owned();
+    let mut lines: Vec<String> = content.lines().map(ToString::to_string).collect();
+    if content.ends_with('\n') || lines.is_empty() {
+        lines.push(String::new());
+    }
+    Ok((lines, binary_size))
 }
 
 fn backup_path(path: &Path) -> io::Result<PathBuf> {
@@ -1152,6 +1184,23 @@ mod tests {
             "existing backup"
         );
         assert!(!editor.is_dirty());
+    }
+
+    #[test]
+    fn save_preserves_undo_history_after_refreshing_buffer() {
+        let test_dir = TestDir::new();
+        let path = test_dir.path().join("demo.txt");
+
+        fs::write(&path, "old value").expect("write original file");
+
+        let mut editor = Editor::open(&path).expect("open file");
+        editor.begin_selection();
+        editor.select_to(0, "old value".chars().count());
+        editor.insert_text("new value");
+
+        assert_eq!(editor.save().expect("save edited file"), SaveOutcome::Saved);
+        assert!(editor.undo());
+        assert_eq!(editor.lines(), &["old value".to_string()]);
     }
 
     #[test]
