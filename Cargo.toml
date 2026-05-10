@@ -1,8 +1,11 @@
 [package]
 name = "trubo"
-version = "0.1.0"
+version = "0.1.5"
 edition = "2024"
-description = "A retro DOS-style TUI text editor"
+description = "A Text-Based Editor, Browser, and File Manager"
+repository = "https://github.com/vkuncak/trubo"
+readme = "README.md"
+rust-version = "1.95"
 license = "MIT"
 
 [dependencies]
