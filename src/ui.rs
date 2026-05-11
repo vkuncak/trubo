@@ -169,6 +169,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 dialog,
                 anchored_file_operation_area(app, root, 48, confirm_file_operation_dialog_height(app)),
             ),
+            Dialog::ResolveFileConflict => draw_dialog(
+                frame,
+                app,
+                dialog,
+                anchored_file_operation_area(app, root, 58, 7),
+            ),
         }
     }
 }
@@ -971,6 +977,7 @@ fn draw_dialog(frame: &mut Frame, app: &App, dialog: Dialog, area: Rect) {
         Dialog::RegexSearch => draw_regex_search_dialog(frame, app, area),
         Dialog::FileOperationName => draw_file_operation_name_dialog(frame, app, area),
         Dialog::ConfirmFileOperation => draw_file_operation_dialog(frame, app, area),
+        Dialog::ResolveFileConflict => draw_file_conflict_dialog(frame, app, area),
     }
 }
 
@@ -1286,6 +1293,50 @@ fn draw_file_operation_dialog(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled("N/Esc", key),
         Span::styled(" cancel", base),
     ]));
+
+    frame.render_widget(
+        Paragraph::new(Text::from(lines))
+            .style(Style::default().bg(CURRENT_THEME.dialog_background))
+            .alignment(Alignment::Left)
+            .wrap(Wrap { trim: true }),
+        content_area,
+    );
+}
+
+fn draw_file_conflict_dialog(frame: &mut Frame, app: &App, area: Rect) {
+    let title = app.pending_file_conflict_title().unwrap_or("Target exists");
+    let (source, target) = app
+        .pending_file_conflict_paths()
+        .unwrap_or_else(|| (String::new(), String::new()));
+
+    let base = Style::default()
+        .fg(CURRENT_THEME.status_bar_fg)
+        .bg(CURRENT_THEME.dialog_background);
+    let accent = base.add_modifier(Modifier::BOLD);
+    let key = Style::default()
+        .fg(CURRENT_THEME.status_hotkey_fg)
+        .bg(CURRENT_THEME.dialog_background)
+        .add_modifier(Modifier::BOLD);
+
+    let content_area = draw_compact_dialog_shell(frame, area);
+    let lines = vec![
+        Line::from(vec![Span::styled(title, key)]),
+        Line::from(vec![
+            Span::styled(file_name_for_display(&source), accent),
+            Span::styled(" conflicts with ", base),
+            Span::styled(truncate(&target, content_area.width.saturating_sub(16)), base),
+        ]),
+        Line::from(vec![
+            Span::styled("O", key),
+            Span::styled(" overwrite  ", base),
+            Span::styled("S", key),
+            Span::styled(" skip  ", base),
+            Span::styled("R", key),
+            Span::styled(" rename  ", base),
+            Span::styled("Esc", key),
+            Span::styled(" cancel", base),
+        ]),
+    ];
 
     frame.render_widget(
         Paragraph::new(Text::from(lines))

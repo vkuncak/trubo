@@ -168,6 +168,7 @@ pub enum Dialog {
     RegexSearch,
     FileOperationName,
     ConfirmFileOperation,
+    ResolveFileConflict,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -191,6 +192,25 @@ struct PendingFileOperation {
     target_dir: Option<PathBuf>,
     target_name: Option<PathBuf>,
     browser_index: usize,
+    current_index: usize,
+    completed_targets: Vec<PathBuf>,
+    overwritten_count: usize,
+    skipped_count: usize,
+    rename_from_conflict: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileConflictResolution {
+    Overwrite,
+    Skip,
+    Rename,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileOperationStep {
+    Continue,
+    Done,
+    Conflict,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -610,7 +630,11 @@ impl App {
 
     pub fn pending_file_operation_prompt_title(&self) -> Option<&'static str> {
         let operation = self.pending_file_operation.as_ref()?;
-        Some(operation.kind.name_prompt_title())
+        if operation.rename_from_conflict {
+            Some("Enter a new file name")
+        } else {
+            Some(operation.kind.name_prompt_title())
+        }
     }
 
     pub fn pending_file_operation_name(&self) -> Option<&str> {
@@ -621,6 +645,19 @@ impl App {
     pub fn pending_file_operation_name_cursor(&self) -> Option<usize> {
         self.pending_file_operation.as_ref()?;
         Some(self.pending_file_operation_name_input.cursor())
+    }
+
+    pub fn pending_file_conflict_title(&self) -> Option<&'static str> {
+        let operation = self.pending_file_operation.as_ref()?;
+        Some(operation.conflict_title())
+    }
+
+    pub fn pending_file_conflict_paths(&self) -> Option<(String, String)> {
+        let operation = self.pending_file_operation.as_ref()?;
+        Some((
+            operation.current_source()?.display().to_string(),
+            operation.current_target_path()?.display().to_string(),
+        ))
     }
 
     pub fn pending_new_directory_parent(&self) -> Option<String> {
@@ -903,10 +940,30 @@ impl App {
             },
             Dialog::ConfirmFileOperation => match _key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
-                    self.confirm_pending_file_operation();
+                    self.run_pending_file_operation();
                     Action::None
                 }
                 KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    self.clear_file_operation_request();
+                    self.status = "File operation cancelled".to_string();
+                    Action::None
+                }
+                _ => Action::None,
+            },
+            Dialog::ResolveFileConflict => match _key.code {
+                KeyCode::Char('o') | KeyCode::Char('O') => {
+                    self.resolve_file_conflict(FileConflictResolution::Overwrite);
+                    Action::None
+                }
+                KeyCode::Char('s') | KeyCode::Char('S') => {
+                    self.resolve_file_conflict(FileConflictResolution::Skip);
+                    Action::None
+                }
+                KeyCode::Char('r') | KeyCode::Char('R') => {
+                    self.resolve_file_conflict(FileConflictResolution::Rename);
+                    Action::None
+                }
+                KeyCode::Esc => {
                     self.clear_file_operation_request();
                     self.status = "File operation cancelled".to_string();
                     Action::None
@@ -1409,6 +1466,11 @@ impl App {
             target_dir,
             target_name: Some(source_name),
             browser_index,
+            current_index: 0,
+            completed_targets: Vec::new(),
+            overwritten_count: 0,
+            skipped_count: 0,
+            rename_from_conflict: false,
         });
 
         if self.should_prompt_for_file_operation_name() {
@@ -1552,8 +1614,9 @@ impl App {
         }
         if let Some(operation) = self.pending_file_operation.as_mut() {
             operation.target_name = target_path.file_name().map(PathBuf::from);
+            operation.rename_from_conflict = false;
         }
-        self.confirm_pending_file_operation();
+        self.run_pending_file_operation();
     }
 
     fn clear_file_operation_request(&mut self) {
@@ -1563,15 +1626,80 @@ impl App {
     }
 
 
-    fn confirm_pending_file_operation(&mut self) {
-        let Some(operation) = self.pending_file_operation.clone() else {
-            self.dialog = None;
-            return;
-        };
+    fn run_pending_file_operation(&mut self) {
+        self.dialog = None;
 
-        let result = perform_pending_file_operation(&operation);
+        loop {
+            let Some(operation) = self.pending_file_operation.as_mut() else {
+                return;
+            };
 
-        self.finish_pending_file_operation(operation, result);
+            match try_process_pending_file_operation_step(operation) {
+                Ok(FileOperationStep::Continue) => {}
+                Ok(FileOperationStep::Done) => {
+                    let operation = self.pending_file_operation.clone().expect("pending operation missing");
+                    self.finish_pending_file_operation(operation, Ok(()));
+                    return;
+                }
+                Ok(FileOperationStep::Conflict) => {
+                    self.dialog = Some(Dialog::ResolveFileConflict);
+                    self.status = "File already exists".to_string();
+                    return;
+                }
+                Err(error) => {
+                    let operation = self.pending_file_operation.clone().expect("pending operation missing");
+                    self.finish_pending_file_operation(operation, Err(error));
+                    return;
+                }
+            }
+        }
+    }
+
+    fn resolve_file_conflict(&mut self, resolution: FileConflictResolution) {
+        match resolution {
+            FileConflictResolution::Overwrite => {
+                let Some(operation) = self.pending_file_operation.as_mut() else {
+                    self.dialog = None;
+                    return;
+                };
+                let Some(target_path) = operation.current_target_path() else {
+                    let operation = self.pending_file_operation.clone().expect("pending operation missing");
+                    self.finish_pending_file_operation(
+                        operation,
+                        Err(io::Error::other("file operation target is missing")),
+                    );
+                    return;
+                };
+                if let Err(error) = remove_path(&target_path) {
+                    let operation = self.pending_file_operation.clone().expect("pending operation missing");
+                    self.finish_pending_file_operation(operation, Err(error));
+                    return;
+                }
+                operation.overwritten_count += 1;
+                self.run_pending_file_operation();
+            }
+            FileConflictResolution::Skip => {
+                if let Some(operation) = self.pending_file_operation.as_mut() {
+                    operation.advance_after_skip();
+                }
+                self.run_pending_file_operation();
+            }
+            FileConflictResolution::Rename => {
+                let Some(operation) = self.pending_file_operation.as_mut() else {
+                    self.dialog = None;
+                    return;
+                };
+                let default_name = operation
+                    .current_source()
+                    .and_then(|path| path.file_name())
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                operation.rename_from_conflict = true;
+                self.pending_file_operation_name_input.set_text(default_name);
+                self.dialog = Some(Dialog::FileOperationName);
+                self.status = "Choose a new file name".to_string();
+            }
+        }
     }
 
     fn finish_pending_file_operation(
@@ -1583,7 +1711,7 @@ impl App {
 
         match result {
             Ok(()) => {
-                let moved_targets = operation.result_paths();
+                let moved_targets = operation.completed_targets();
                 for browser_index in 0..self.visible_browser_count() {
                     self.refresh_browser_pane(browser_index);
                 }
@@ -1955,6 +2083,53 @@ impl PendingFileOperation {
         self.target_name.as_deref()
     }
 
+    fn current_source(&self) -> Option<&Path> {
+        self.sources.get(self.current_index).map(PathBuf::as_path)
+    }
+
+    fn current_target_path(&self) -> Option<PathBuf> {
+        let source = self.current_source()?;
+        let target_dir = self.target_dir.as_deref()?;
+        let target_name = if self.sources.len() == 1 {
+            self.target_name().or_else(|| source.file_name().map(Path::new))?
+        } else {
+            source.file_name().map(Path::new)?
+        };
+        Some(target_dir.join(target_name))
+    }
+
+    fn advance_after_success(&mut self, target_path: Option<PathBuf>) {
+        if let Some(target_path) = target_path {
+            self.completed_targets.push(target_path);
+        }
+        self.current_index += 1;
+        self.rename_from_conflict = false;
+        if self.sources.len() == 1 {
+            self.target_name = None;
+        }
+    }
+
+    fn advance_after_skip(&mut self) {
+        self.skipped_count += 1;
+        self.current_index += 1;
+        self.rename_from_conflict = false;
+        if self.sources.len() == 1 {
+            self.target_name = None;
+        }
+    }
+
+    fn completed_targets(&self) -> Vec<PathBuf> {
+        self.completed_targets.clone()
+    }
+
+    fn conflict_title(&self) -> &'static str {
+        match self.kind {
+            FileOperationKind::Copy => "Copy target exists",
+            FileOperationKind::Move => "Move target exists",
+            FileOperationKind::Delete => "Target exists",
+        }
+    }
+
     fn result_paths(&self) -> Vec<PathBuf> {
         match self.kind {
             FileOperationKind::Delete => Vec::new(),
@@ -1981,46 +2156,49 @@ impl PendingFileOperation {
     }
 
     fn success_message(&self) -> String {
-        let count = self.sources.len();
-        if count == 1 {
-            let source = self
-                .sources
-                .first()
-                .map(|path| path.display().to_string())
-                .unwrap_or_default();
-            match self.kind {
-                FileOperationKind::Copy => format!("Copied {source}"),
-                FileOperationKind::Move if self.source_parent() == self.target_dir.as_deref() => {
-                    let target = self
-                        .result_paths()
-                        .first()
-                        .map(|path| path.display().to_string())
-                        .unwrap_or(source);
-                    format!("Renamed {} to {target}", self.sources[0].display())
+        let count = match self.kind {
+            FileOperationKind::Delete => self.sources.len().saturating_sub(self.skipped_count),
+            FileOperationKind::Copy | FileOperationKind::Move => self.completed_targets.len(),
+        };
+        match self.kind {
+            FileOperationKind::Copy => format!(
+                "Copy stats: copied {}, overwritten {}, skipped {}",
+                count, self.overwritten_count, self.skipped_count
+            ),
+            FileOperationKind::Move => format!(
+                "Move stats: moved {}, overwritten {}, skipped {}",
+                count, self.overwritten_count, self.skipped_count
+            ),
+            FileOperationKind::Delete => {
+                let mut message = format!("Deleted {count} files");
+                if self.skipped_count > 0 {
+                    message.push_str(&format!(", skipped {}", self.skipped_count));
                 }
-                FileOperationKind::Move => format!("Moved {source}"),
-                FileOperationKind::Delete => format!("Deleted {source}"),
-            }
-        } else {
-            match self.kind {
-                FileOperationKind::Copy => format!("Copied {count} files"),
-                FileOperationKind::Move => format!("Moved {count} files"),
-                FileOperationKind::Delete => format!("Deleted {count} files"),
+                message
             }
         }
     }
 }
 
-fn perform_pending_file_operation(operation: &PendingFileOperation) -> io::Result<()> {
+fn try_process_pending_file_operation_step(
+    operation: &mut PendingFileOperation,
+) -> io::Result<FileOperationStep> {
+    let Some(source) = operation.current_source().map(Path::to_path_buf) else {
+        return Ok(FileOperationStep::Done);
+    };
+
     match operation.kind {
         FileOperationKind::Delete => {
-            for source in &operation.sources {
-                remove_path(source)?;
-            }
-            Ok(())
+            remove_path(&source)?;
+            operation.advance_after_success(None);
+            Ok(if operation.current_index >= operation.sources.len() {
+                FileOperationStep::Done
+            } else {
+                FileOperationStep::Continue
+            })
         }
         FileOperationKind::Copy | FileOperationKind::Move => {
-            let Some(target_dir) = operation.target_dir.as_deref() else {
+            let Some(target_path) = operation.current_target_path() else {
                 return Err(io::Error::other(match operation.kind {
                     FileOperationKind::Copy => "copy target is missing",
                     FileOperationKind::Move => "move target is missing",
@@ -2028,32 +2206,22 @@ fn perform_pending_file_operation(operation: &PendingFileOperation) -> io::Resul
                 }));
             };
 
-            for source in &operation.sources {
-                let target_name = if operation.sources.len() == 1 {
-                    operation
-                        .target_name()
-                        .or_else(|| source.file_name().map(Path::new))
-                } else {
-                    source.file_name().map(Path::new)
-                }
-                .ok_or_else(|| io::Error::other("file operation target name is missing"))?;
-
-                let target_path = target_dir.join(target_name);
-                if target_path.exists() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::AlreadyExists,
-                        format!("{} already exists", target_path.display()),
-                    ));
-                }
-
-                match operation.kind {
-                    FileOperationKind::Copy => copy_path(source, &target_path)?,
-                    FileOperationKind::Move => move_path(source, &target_path)?,
-                    FileOperationKind::Delete => unreachable!(),
-                }
+            if target_path.exists() {
+                return Ok(FileOperationStep::Conflict);
             }
 
-            Ok(())
+            match operation.kind {
+                FileOperationKind::Copy => copy_path(&source, &target_path)?,
+                FileOperationKind::Move => move_path(&source, &target_path)?,
+                FileOperationKind::Delete => unreachable!(),
+            }
+
+            operation.advance_after_success(Some(target_path));
+            Ok(if operation.current_index >= operation.sources.len() {
+                FileOperationStep::Done
+            } else {
+                FileOperationStep::Continue
+            })
         }
     }
 }
