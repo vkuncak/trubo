@@ -166,6 +166,7 @@ pub enum Dialog {
     SaveFile,
     NewDirectory,
     RegexSearch,
+    BrowserSelectionPattern,
     FileOperationName,
     ConfirmFileOperation,
     ResolveFileConflict,
@@ -211,6 +212,12 @@ enum FileOperationStep {
     Continue,
     Done,
     Conflict,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BrowserSelectionPatternMode {
+    Add,
+    Remove,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -348,6 +355,7 @@ pub struct App {
     pending_file_operation_name_input: TextInputState,
     search_pattern: String,
     search_input: TextInputState,
+    pending_browser_selection_pattern_mode: Option<BrowserSelectionPatternMode>,
     full_redraw_requested: bool,
     browser_preview_due_at: Option<Instant>,
     drag_target: Option<DragTarget>,
@@ -390,6 +398,7 @@ impl App {
             pending_file_operation_name_input: TextInputState::default(),
             search_pattern: String::new(),
             search_input: TextInputState::default(),
+            pending_browser_selection_pattern_mode: None,
             full_redraw_requested: false,
             browser_preview_due_at: None,
             drag_target: None,
@@ -681,6 +690,14 @@ impl App {
         self.search_input.cursor()
     }
 
+    pub fn browser_selection_pattern_title(&self) -> &'static str {
+        match self.pending_browser_selection_pattern_mode {
+            Some(BrowserSelectionPatternMode::Add) => "Add files to selection by regex",
+            Some(BrowserSelectionPatternMode::Remove) => "Remove files from selection by regex",
+            None => "File name regex",
+        }
+    }
+
     pub fn browser_label(&self, index: usize) -> String {
         let browser = &self.browsers[index];
         let selected_count = browser.selected_paths.len();
@@ -922,6 +939,18 @@ impl App {
                 KeyCode::Esc => {
                     self.dialog = None;
                     self.status = "Search cancelled".to_string();
+                    Action::None
+                }
+                _ => handle_text_input_key(&mut self.search_input, _key),
+            },
+            Dialog::BrowserSelectionPattern => match _key.code {
+                KeyCode::Enter => {
+                    self.confirm_browser_selection_pattern();
+                    Action::None
+                }
+                KeyCode::Esc => {
+                    self.clear_browser_selection_pattern_request();
+                    self.status = "Selection pattern cancelled".to_string();
                     Action::None
                 }
                 _ => handle_text_input_key(&mut self.search_input, _key),
@@ -1254,9 +1283,30 @@ impl App {
     pub fn request_regex_search(&mut self) {
         self.close_menu();
         self.assign_focus(Focus::Editor);
+        self.pending_browser_selection_pattern_mode = None;
         self.search_input.set_text(self.search_pattern.clone());
         self.dialog = Some(Dialog::RegexSearch);
         self.status = "Enter regular expression to search".to_string();
+    }
+
+    fn request_browser_selection_pattern(&mut self, mode: BrowserSelectionPatternMode) {
+        self.close_menu();
+        let Some(_) = self.focus_browser_index() else {
+            self.status = "Activate a files pane first".to_string();
+            return;
+        };
+
+        self.pending_browser_selection_pattern_mode = Some(mode);
+        self.search_input.clear();
+        self.dialog = Some(Dialog::BrowserSelectionPattern);
+        self.status = match mode {
+            BrowserSelectionPatternMode::Add => {
+                "Enter file name regex to add matching files to selection".to_string()
+            }
+            BrowserSelectionPatternMode::Remove => {
+                "Enter file name regex to remove matching files from selection".to_string()
+            }
+        };
     }
 
     pub fn handle_mouse(&mut self, mouse: MouseEvent) -> Action {
@@ -1398,6 +1448,12 @@ impl App {
                 if let Some(parent) = parent {
                     self.navigate_to_dir(browser_index, parent, Some(&current_dir));
                 }
+            }
+            KeyCode::Char('+') => {
+                self.request_browser_selection_pattern(BrowserSelectionPatternMode::Add)
+            }
+            KeyCode::Char('-') => {
+                self.request_browser_selection_pattern(BrowserSelectionPatternMode::Remove)
             }
             KeyCode::Char('r') | KeyCode::Char('R') => {
                 self.refresh_browser_pane(browser_index);
@@ -1571,6 +1627,83 @@ impl App {
         self.editor.select_to(row, end_col);
         self.editor.center_view_on(row, start_col);
         self.status = format!("Found /{pattern}/ at {}:{}", row + 1, start_col + 1);
+    }
+
+    fn confirm_browser_selection_pattern(&mut self) {
+        let Some(mode) = self.pending_browser_selection_pattern_mode else {
+            self.dialog = None;
+            return;
+        };
+
+        let Some(browser_index) = self.focus_browser_index() else {
+            self.clear_browser_selection_pattern_request();
+            self.status = "Activate a files pane first".to_string();
+            return;
+        };
+
+        if self.search_input.as_str().is_empty() {
+            self.status = "Search pattern cannot be empty".to_string();
+            return;
+        }
+
+        let pattern = self.search_input.as_str().to_string();
+        let regex = match Regex::new(&pattern) {
+            Ok(regex) => regex,
+            Err(error) => {
+                self.status = format!("Invalid regex: {error}");
+                return;
+            }
+        };
+
+        let browser = &mut self.browsers[browser_index];
+        let mut changed = 0usize;
+        let mut first_match: Option<PathBuf> = None;
+
+        for entry in &browser.entries {
+            if entry.kind == ProjectEntryKind::Parent {
+                continue;
+            }
+            if !regex.is_match(&entry.label) {
+                continue;
+            }
+
+            if first_match.is_none() {
+                first_match = Some(entry.path.clone());
+            }
+
+            match mode {
+                BrowserSelectionPatternMode::Add => {
+                    if browser.selected_paths.insert(entry.path.clone()) {
+                        changed += 1;
+                    }
+                }
+                BrowserSelectionPatternMode::Remove => {
+                    if browser.selected_paths.remove(&entry.path) {
+                        changed += 1;
+                    }
+                }
+            }
+        }
+
+        self.clear_browser_selection_pattern_request();
+        if let Some(path) = first_match.as_deref() {
+            self.select_entry_for_path(browser_index, path);
+            self.schedule_browser_preview();
+        }
+        self.status = match mode {
+            BrowserSelectionPatternMode::Add => {
+                format!("Added {changed} files to selection with /{pattern}/")
+            }
+            BrowserSelectionPatternMode::Remove => {
+                format!("Removed {changed} files from selection with /{pattern}/")
+            }
+        };
+    }
+
+    fn clear_browser_selection_pattern_request(&mut self) {
+        self.dialog = None;
+        self.pending_browser_selection_pattern_mode = None;
+        self.search_input.clear();
     }
 
     fn should_prompt_for_file_operation_name(&self) -> bool {
