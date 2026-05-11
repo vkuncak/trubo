@@ -21,6 +21,7 @@ struct Theme {
     panel_text_muted: Color,
     panel_title_text: Color,
     browser_header_bg: Color,
+    browser_header_active_bg: Color,
     menu_brand_bg: Color,
     menu_brand_fg: Color,
     menu_bar_bg: Color,
@@ -59,6 +60,7 @@ const CURRENT_THEME: Theme = Theme {
     panel_text_muted: Color::Rgb(85, 85, 85),
     panel_title_text: Color::Rgb(0, 0, 80),
     browser_header_bg: Color::Rgb(210, 230, 255),
+    browser_header_active_bg: Color::Rgb(255, 225, 150),
     menu_brand_bg: Color::Rgb(200, 200, 200),
     menu_brand_fg: Color::Rgb(255, 255, 85),
     menu_bar_bg: Color::Rgb(200, 200, 200),
@@ -544,10 +546,15 @@ fn draw_browser(frame: &mut Frame, area: Rect, app: &mut App, browser_index: usi
     } else {
         Focus::BrowserSecondary
     };
+    let is_active_browser = app.focus == browser_focus;
     let mut header_style = Style::default()
         .fg(CURRENT_THEME.panel_title_text)
-        .bg(CURRENT_THEME.browser_header_bg);
-    if app.focus == browser_focus {
+        .bg(if is_active_browser {
+            CURRENT_THEME.browser_header_active_bg
+        } else {
+            CURRENT_THEME.browser_header_bg
+        });
+    if is_active_browser {
         header_style = header_style.add_modifier(Modifier::BOLD);
     }
 
