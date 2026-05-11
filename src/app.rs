@@ -675,7 +675,12 @@ impl App {
         };
 
         if entry.is_directory() {
-            self.navigate_to_dir(browser_index, entry.path);
+            let return_path = if entry.kind == ProjectEntryKind::Parent {
+                Some(self.browsers[browser_index].dir.clone())
+            } else {
+                None
+            };
+            self.navigate_to_dir(browser_index, entry.path, return_path.as_deref());
             return;
         }
 
@@ -703,13 +708,16 @@ impl App {
         }
     }
 
-    fn navigate_to_dir(&mut self, browser_index: usize, path: PathBuf) {
+    fn navigate_to_dir(&mut self, browser_index: usize, path: PathBuf, selected_path: Option<&Path>) {
         let path = path.canonicalize().unwrap_or(path);
         let browser = &mut self.browsers[browser_index];
         browser.dir = path;
         browser.selected_entry = 0;
         browser.selected_paths.clear();
         self.refresh_browser_pane(browser_index);
+        if let Some(selected_path) = selected_path {
+            self.select_entry_for_path(browser_index, selected_path);
+        }
         self.assign_focus(Self::focus_for_browser_index(browser_index));
         self.status = format!("Browsing {}", self.browser_label(browser_index));
     }
@@ -1328,9 +1336,10 @@ impl App {
             }
             KeyCode::Enter => self.open_selected_file(),
             KeyCode::Backspace => {
-                let parent = self.browsers[browser_index].dir.parent().map(Path::to_path_buf);
+                let current_dir = self.browsers[browser_index].dir.clone();
+                let parent = current_dir.parent().map(Path::to_path_buf);
                 if let Some(parent) = parent {
-                    self.navigate_to_dir(browser_index, parent);
+                    self.navigate_to_dir(browser_index, parent, Some(&current_dir));
                 }
             }
             KeyCode::Char('r') | KeyCode::Char('R') => {

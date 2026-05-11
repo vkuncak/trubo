@@ -539,15 +539,21 @@ fn draw_browser(frame: &mut Frame, area: Rect, app: &mut App, browser_index: usi
         ])
         .split(inner);
     let list_area = sections.get(1).copied().unwrap_or(inner);
+    let browser_focus = if browser_index == 0 {
+        Focus::BrowserPrimary
+    } else {
+        Focus::BrowserSecondary
+    };
+    let mut header_style = Style::default()
+        .fg(CURRENT_THEME.panel_title_text)
+        .bg(CURRENT_THEME.browser_header_bg);
+    if app.focus == browser_focus {
+        header_style = header_style.add_modifier(Modifier::BOLD);
+    }
 
     frame.render_widget(
         Paragraph::new(Text::from(header_lines))
-            .style(
-                Style::default()
-                    .fg(CURRENT_THEME.panel_title_text)
-                    .bg(CURRENT_THEME.browser_header_bg)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            .style(header_style),
         sections[0],
     );
 
