@@ -2,13 +2,9 @@
 
 ## Dual Panel Dialog Improvement
 
-Dual panel dialogs are cut off to keep the concise.
+Dual panel dialogs are cut off to keep them concise.
 
 However, the display of file destination is important and should be enabled by expanding the width of the dialog box when appropriate. If the file name is too wide to display, it should be wrappend and not stripped.
-
-## File Selection
-
-Implement file selection using Ctrl-T and copying or moving a list of files.
 
 ## IU testing on Linux
 

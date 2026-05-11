@@ -213,6 +213,12 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
     }
 
     match key.code {
+        KeyCode::Insert
+            if key.modifiers.is_empty()
+                && matches!(app.focus, Focus::BrowserPrimary | Focus::BrowserSecondary) =>
+        {
+            app.toggle_selected_browser_entry()
+        }
         KeyCode::Insert if key.modifiers.contains(KeyModifiers::SHIFT) => app.paste_from_clipboard(),
         KeyCode::Delete if key.modifiers.contains(KeyModifiers::SHIFT) => app.cut_selection(),
         KeyCode::F(1) => app.help_open = true,
