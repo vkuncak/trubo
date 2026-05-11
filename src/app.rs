@@ -1460,11 +1460,14 @@ impl App {
             return;
         }
 
+        let single_source = sources.len() == 1;
+
         self.pending_file_operation = Some(PendingFileOperation {
             kind,
             sources,
             target_dir,
-            target_name: Some(source_name),
+            target_name: (kind != FileOperationKind::Delete && single_source)
+                .then_some(source_name),
             browser_index,
             current_index: 0,
             completed_targets: Vec::new(),
@@ -2090,11 +2093,9 @@ impl PendingFileOperation {
     fn current_target_path(&self) -> Option<PathBuf> {
         let source = self.current_source()?;
         let target_dir = self.target_dir.as_deref()?;
-        let target_name = if self.sources.len() == 1 {
-            self.target_name().or_else(|| source.file_name().map(Path::new))?
-        } else {
-            source.file_name().map(Path::new)?
-        };
+        let target_name = self
+            .target_name()
+            .or_else(|| source.file_name().map(Path::new))?;
         Some(target_dir.join(target_name))
     }
 
@@ -2104,18 +2105,14 @@ impl PendingFileOperation {
         }
         self.current_index += 1;
         self.rename_from_conflict = false;
-        if self.sources.len() == 1 {
-            self.target_name = None;
-        }
+        self.target_name = None;
     }
 
     fn advance_after_skip(&mut self) {
         self.skipped_count += 1;
         self.current_index += 1;
         self.rename_from_conflict = false;
-        if self.sources.len() == 1 {
-            self.target_name = None;
-        }
+        self.target_name = None;
     }
 
     fn completed_targets(&self) -> Vec<PathBuf> {
