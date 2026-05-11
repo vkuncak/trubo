@@ -40,6 +40,7 @@ struct Theme {
     browser_selected_active_bg: Color,
     browser_selected_inactive_bg: Color,
     selected_fg: Color,
+    browser_marked_fg: Color,
     editor_text_fg: Color,
     editor_text_bg: Color,
     editor_comment_fg: Color,
@@ -77,6 +78,7 @@ const CURRENT_THEME: Theme = Theme {
     browser_selected_active_bg: Color::Rgb(255, 195, 20),
     browser_selected_inactive_bg: Color::Rgb(210, 230, 255),
     selected_fg: Color::Rgb(0, 0, 0),
+    browser_marked_fg: Color::Rgb(0, 0, 200),
     editor_text_fg: Color::Rgb(0, 0, 0),
     editor_text_bg: Color::Rgb(255, 255, 255),
     editor_comment_fg: Color::Rgb(0, 90, 0),
@@ -93,11 +95,12 @@ const SECONDARY_BROWSER_HEADER_BINDINGS: [(&str, &str); 4] = [
     ("F7", " MkDir  "),
     ("F8", " Delete "),
 ];
-const PRIMARY_HEADER_BINDINGS: [(&str, &str); 6] = [
+const PRIMARY_HEADER_BINDINGS: [(&str, &str); 7] = [
     ("F1", " Help  "),
     ("Ctrl-B", " Side  "),
     ("`", " Dual "),
     ("F4", " Pane  "),
+    ("Ctrl-T", " Mark  "),
     ("F10", " Menu  "),
     ("Ctrl-Q", " Quit"),
 ];
@@ -588,10 +591,20 @@ fn draw_browser(frame: &mut Frame, area: Rect, app: &mut App, browser_index: usi
         .skip(start)
         .take(height)
         .map(|(index, entry)| {
+            let marked = app.browser_entry_is_selected(browser_index, entry);
             let style = if index == selected {
                 Style::default()
-                    .fg(CURRENT_THEME.selected_fg)
+                    .fg(if marked {
+                        CURRENT_THEME.browser_marked_fg
+                    } else {
+                        CURRENT_THEME.selected_fg
+                    })
                     .bg(selected_bg)
+                    .add_modifier(Modifier::BOLD)
+            } else if marked {
+                Style::default()
+                    .fg(CURRENT_THEME.browser_marked_fg)
+                    .bg(CURRENT_THEME.panel_background)
                     .add_modifier(Modifier::BOLD)
             } else if entry.is_directory() {
                 Style::default()
@@ -868,6 +881,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         help_bindings_line(&[("Ctrl+S", "Save"), ("Ctrl+O", "Open selected file"), ("Ctrl+F", "Regex search")]),
         help_bindings_line(&[("Ctrl+L", "Redraw screen"), ("Ctrl+R", "Run current file"), ("Ctrl+B", "Editor only")]),
         help_bindings_line(&[("`", "Toggle dual pane")]),
+        help_bindings_line(&[("Ctrl+T", "Mark/unmark entry")]),
         help_bindings_line(&[("Ctrl+Space", "Toggle select mode")]),
         help_bindings_line(&[("Ctrl+C", "Copy"), ("Ctrl+X", "Cut"), ("Ctrl+V", "Paste"), ("Ctrl+Z", "Undo")]),
         help_bindings_line(&[("Ctrl+Y", "Redo")]),
@@ -876,6 +890,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Line::from(""),
         help_section_line("Browser"),
         help_bindings_line(&[("Up/Down", "Move selection"), ("Home/End", "Jump to first/last")]),
+        help_bindings_line(&[("Ctrl+T", "Mark/unmark entry"), ("F5/F6/F8", "Apply to marked entries")]),
         help_bindings_line(&[("Enter", "Open file or directory"), ("Backspace", "Parent directory"), ("R", "Refresh")]),
         help_section_line("Editor"),
         help_bindings_line(&[("Arrows", "Move cursor"), ("Home/End", "Line start/end"), ("PgUp/PgDn", "Scroll")]),

@@ -190,6 +190,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
             KeyCode::Home | KeyCode::PageUp if app.focus == Focus::Editor => app.editor.file_home(),
             KeyCode::End | KeyCode::PageDown if app.focus == Focus::Editor => app.editor.file_end(),
             KeyCode::Char('l') | KeyCode::Char('L') => app.request_full_redraw(),
+            KeyCode::Char('t') | KeyCode::Char('T') => app.toggle_selected_browser_entry(),
             KeyCode::Char('c') | KeyCode::Char('C') => app.copy_selection(),
             KeyCode::Char('x') | KeyCode::Char('X') => app.cut_selection(),
             KeyCode::Char('v') | KeyCode::Char('V') => app.paste_from_clipboard(),

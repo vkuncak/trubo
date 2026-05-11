@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     fs, io,
     path::{Path, PathBuf},
     process::Command,
@@ -186,8 +187,9 @@ enum FileOperationKind {
 #[derive(Debug, Clone)]
 struct PendingFileOperation {
     kind: FileOperationKind,
-    source_path: PathBuf,
-    target_path: Option<PathBuf>,
+    sources: Vec<PathBuf>,
+    target_dir: Option<PathBuf>,
+    target_name: Option<PathBuf>,
     browser_index: usize,
 }
 
@@ -288,6 +290,7 @@ pub struct BrowserPane {
     pub dir: PathBuf,
     pub entries: Vec<ProjectEntry>,
     pub selected_entry: usize,
+    pub selected_paths: BTreeSet<PathBuf>,
 }
 
 impl BrowserPane {
@@ -296,6 +299,7 @@ impl BrowserPane {
             dir,
             entries: Vec::new(),
             selected_entry: 0,
+            selected_paths: BTreeSet::new(),
         }
     }
 }
@@ -578,18 +582,25 @@ impl App {
 
     pub fn pending_file_operation_title(&self) -> Option<&'static str> {
         let operation = self.pending_file_operation.as_ref()?;
-        Some(operation.kind.confirm_title(operation.source_path.parent(), operation.target_path.as_deref().and_then(Path::parent)))
+        Some(operation.kind.confirm_title(operation.source_parent(), operation.target_dir.as_deref(), operation.sources.len()))
     }
 
     pub fn pending_file_operation_paths(&self) -> Option<(String, Option<String>)> {
         let operation = self.pending_file_operation.as_ref()?;
-        Some((
-            operation.source_path.display().to_string(),
-            operation
-                .target_path
-                .as_ref()
-                .map(|path| path.display().to_string()),
-        ))
+        let source = if operation.sources.len() == 1 {
+            operation.sources[0].display().to_string()
+        } else {
+            format!("{} files", operation.sources.len())
+        };
+        let target = match operation.kind {
+            FileOperationKind::Delete => None,
+            FileOperationKind::Copy | FileOperationKind::Move => operation
+                .result_paths()
+                .first()
+                .map(|path| path.display().to_string())
+                .or_else(|| operation.target_dir.as_ref().map(|path| path.display().to_string())),
+        };
+        Some((source, target))
     }
 
     pub fn pending_file_operation_browser_index(&self) -> Option<usize> {
@@ -634,7 +645,17 @@ impl App {
     }
 
     pub fn browser_label(&self, index: usize) -> String {
-        self.browsers[index].dir.display().to_string()
+        let browser = &self.browsers[index];
+        let selected_count = browser.selected_paths.len();
+        if selected_count == 0 {
+            browser.dir.display().to_string()
+        } else {
+            format!("{} ({selected_count} selected)", browser.dir.display())
+        }
+    }
+
+    pub fn browser_entry_is_selected(&self, browser_index: usize, entry: &ProjectEntry) -> bool {
+        self.browsers[browser_index].selected_paths.contains(&entry.path)
     }
 
     pub fn open_selected_file(&mut self) {
@@ -687,6 +708,7 @@ impl App {
         let browser = &mut self.browsers[browser_index];
         browser.dir = path;
         browser.selected_entry = 0;
+        browser.selected_paths.clear();
         self.refresh_browser_pane(browser_index);
         self.assign_focus(Self::focus_for_browser_index(browser_index));
         self.status = format!("Browsing {}", self.browser_label(browser_index));
@@ -1110,6 +1132,47 @@ impl App {
         self.request_selected_file_operation(FileOperationKind::Delete);
     }
 
+    pub fn toggle_selected_browser_entry(&mut self) {
+        self.close_menu();
+        let Some(browser_index) = self.focus_browser_index() else {
+            self.status = "Activate a files pane first".to_string();
+            return;
+        };
+
+        let Some(entry) = self.browsers[browser_index]
+            .entries
+            .get(self.browsers[browser_index].selected_entry)
+            .cloned()
+        else {
+            self.status = "No file selected".to_string();
+            return;
+        };
+
+        if entry.kind == ProjectEntryKind::Parent {
+            self.status = "Parent entry cannot be selected".to_string();
+            return;
+        }
+
+        let browser = &mut self.browsers[browser_index];
+        if browser.selected_paths.remove(&entry.path) {
+            let remaining = browser.selected_paths.len();
+            self.status = if remaining == 0 {
+                format!("Deselected {}", entry.label)
+            } else {
+                format!("Deselected {} ({remaining} selected)", entry.label)
+            };
+        } else {
+            browser.selected_paths.insert(entry.path.clone());
+            self.status = format!("Selected {} ({} selected)", entry.label, browser.selected_paths.len());
+        }
+
+        let next_index = (browser.selected_entry + 1).min(browser.entries.len().saturating_sub(1));
+        if next_index != browser.selected_entry {
+            browser.selected_entry = next_index;
+            self.schedule_browser_preview();
+        }
+    }
+
     pub fn request_new_directory(&mut self) {
         self.close_menu();
         let Some(browser_index) = self.focus_browser_index() else {
@@ -1285,46 +1348,57 @@ impl App {
             return;
         };
 
-        let browser = &self.browsers[browser_index];
-        let Some(entry) = browser.entries.get(browser.selected_entry) else {
-            self.status = "No file selected".to_string();
-            return;
+        let (sources, source_name) = {
+            let browser = &self.browsers[browser_index];
+            let mut sources = if browser.selected_paths.is_empty() {
+                let Some(entry) = browser.entries.get(browser.selected_entry) else {
+                    self.status = "No file selected".to_string();
+                    return;
+                };
+
+                if entry.kind == ProjectEntryKind::Parent {
+                    self.status = "Parent entry cannot be used for file operations".to_string();
+                    return;
+                }
+                vec![entry.path.clone()]
+            } else {
+                browser.selected_paths.iter().cloned().collect::<Vec<_>>()
+            };
+            sources.sort();
+            let source_name = sources
+                .first()
+                .and_then(|path| path.file_name())
+                .map(PathBuf::from)
+                .unwrap_or_default();
+            (sources, source_name)
         };
 
-        if entry.kind == ProjectEntryKind::Parent {
-            self.status = "Parent entry cannot be used for file operations".to_string();
+        let target_dir = match kind {
+            FileOperationKind::Delete => None,
+            FileOperationKind::Copy | FileOperationKind::Move => Some(if self.secondary_browser_enabled {
+                self.browsers[1 - browser_index].dir.clone()
+            } else {
+                self.browsers[browser_index].dir.clone()
+            }),
+        };
+
+        if sources.len() > 1
+            && matches!(kind, FileOperationKind::Copy | FileOperationKind::Move)
+            && target_dir.as_deref() == sources.first().and_then(|path| path.parent())
+        {
+            self.status = format!(
+                "{} {} selected files needs a different target directory",
+                kind.label().to_ascii_uppercase(),
+                sources.len()
+            );
             return;
         }
 
-        let file_name = entry
-            .path
-            .file_name()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(&entry.label));
-        let target_path = match kind {
-            FileOperationKind::Delete => None,
-            FileOperationKind::Copy => {
-                let target_dir = if self.secondary_browser_enabled {
-                    self.browsers[1 - browser_index].dir.clone()
-                } else {
-                    self.browsers[browser_index].dir.clone()
-                };
-                Some(target_dir.join(&file_name))
-            }
-            FileOperationKind::Move => {
-                let target_dir = if self.secondary_browser_enabled {
-                    self.browsers[1 - browser_index].dir.clone()
-                } else {
-                    self.browsers[browser_index].dir.clone()
-                };
-                Some(target_dir.join(file_name))
-            }
-        };
-
         self.pending_file_operation = Some(PendingFileOperation {
             kind,
-            source_path: entry.path.clone(),
-            target_path,
+            sources,
+            target_dir,
+            target_name: Some(source_name),
             browser_index,
         });
 
@@ -1332,7 +1406,8 @@ impl App {
             let default_name = self
                 .pending_file_operation
                 .as_ref()
-                .and_then(|operation| operation.source_path.file_name())
+                .and_then(|operation| operation.sources.first())
+                .and_then(|path| path.file_name())
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default();
             self.pending_file_operation_name_input.set_text(default_name);
@@ -1429,8 +1504,12 @@ impl App {
             return false;
         };
 
+        if operation.sources.len() != 1 {
+            return false;
+        }
+
         matches!(operation.kind, FileOperationKind::Copy | FileOperationKind::Move)
-            && operation.source_path.parent() == operation.target_path.as_deref().and_then(Path::parent)
+            && operation.sources.first().and_then(|path| path.parent()) == operation.target_dir.as_deref()
     }
 
     fn confirm_file_operation_name(&mut self) {
@@ -1449,19 +1528,21 @@ impl App {
             return;
         }
 
-        let Some(parent) = operation.target_path.as_deref().and_then(Path::parent) else {
+        let Some(parent) = operation.target_dir.as_deref() else {
             self.clear_file_operation_request();
             self.status = "File operation target is missing".to_string();
             return;
         };
 
         let target_path = parent.join(name);
-        if operation.kind == FileOperationKind::Copy && target_path == operation.source_path {
+        if operation.kind == FileOperationKind::Copy
+            && operation.sources.first().is_some_and(|source| target_path == *source)
+        {
             self.status = "Copy name must be changed".to_string();
             return;
         }
         if let Some(operation) = self.pending_file_operation.as_mut() {
-            operation.target_path = Some(target_path);
+            operation.target_name = target_path.file_name().map(PathBuf::from);
         }
         self.confirm_pending_file_operation();
     }
@@ -1479,41 +1560,7 @@ impl App {
             return;
         };
 
-        let result = match operation.kind {
-            FileOperationKind::Copy => {
-                let Some(target_path) = operation.target_path.as_ref() else {
-                    return self.finish_pending_file_operation(
-                        operation,
-                        Err(io::Error::other("copy target is missing")),
-                    );
-                };
-                if target_path.exists() {
-                    Err(io::Error::new(
-                        io::ErrorKind::AlreadyExists,
-                        format!("{} already exists", target_path.display()),
-                    ))
-                } else {
-                    copy_path(&operation.source_path, target_path)
-                }
-            }
-            FileOperationKind::Move => {
-                let Some(target_path) = operation.target_path.as_ref() else {
-                    return self.finish_pending_file_operation(
-                        operation,
-                        Err(io::Error::other("move target is missing")),
-                    );
-                };
-                if target_path.exists() {
-                    Err(io::Error::new(
-                        io::ErrorKind::AlreadyExists,
-                        format!("{} already exists", target_path.display()),
-                    ))
-                } else {
-                    move_path(&operation.source_path, target_path)
-                }
-            }
-            FileOperationKind::Delete => remove_path(&operation.source_path),
-        };
+        let result = perform_pending_file_operation(&operation);
 
         self.finish_pending_file_operation(operation, result);
     }
@@ -1527,30 +1574,17 @@ impl App {
 
         match result {
             Ok(()) => {
+                let moved_targets = operation.result_paths();
                 for browser_index in 0..self.visible_browser_count() {
                     self.refresh_browser_pane(browser_index);
                 }
+                self.clear_browser_selection(operation.browser_index);
                 self.assign_focus(Self::focus_for_browser_index(operation.browser_index));
-                if let Some(target_path) = operation.target_path.as_deref() {
+                if let Some(target_path) = moved_targets.first() {
                     self.select_entry_for_path(operation.browser_index, target_path);
                 }
                 self.schedule_browser_preview();
-                self.status = match operation.kind {
-                    FileOperationKind::Copy => format!("Copied {}", operation.source_path.display()),
-                    FileOperationKind::Move
-                        if operation.source_path.parent()
-                            == operation.target_path.as_deref().and_then(Path::parent) =>
-                    {
-                        let target = operation
-                            .target_path
-                            .as_deref()
-                            .map(|path| path.display().to_string())
-                            .unwrap_or_else(|| operation.source_path.display().to_string());
-                        format!("Renamed {} to {}", operation.source_path.display(), target)
-                    }
-                    FileOperationKind::Move => format!("Moved {}", operation.source_path.display()),
-                    FileOperationKind::Delete => format!("Deleted {}", operation.source_path.display()),
-                };
+                self.status = operation.success_message();
             }
             Err(error) => {
                 self.status = format!("{} failed: {error}", operation.kind.label());
@@ -1825,9 +1859,14 @@ impl App {
     fn refresh_browser_pane(&mut self, browser_index: usize) {
         let browser = &mut self.browsers[browser_index];
         browser.entries = list_directory(&browser.dir);
+        browser.selected_paths.retain(|path| browser.entries.iter().any(|entry| entry.path == *path));
         if browser.selected_entry >= browser.entries.len() {
             browser.selected_entry = browser.entries.len().saturating_sub(1);
         }
+    }
+
+    fn clear_browser_selection(&mut self, browser_index: usize) {
+        self.browsers[browser_index].selected_paths.clear();
     }
 
     fn focus_browser_index(&self) -> Option<usize> {
@@ -1869,20 +1908,143 @@ impl FileOperationKind {
         }
     }
 
-    fn confirm_title(self, source_parent: Option<&Path>, target_parent: Option<&Path>) -> &'static str {
+    fn confirm_title(self, source_parent: Option<&Path>, target_parent: Option<&Path>, count: usize) -> &'static str {
+        let plural = count > 1;
         match self {
-            FileOperationKind::Copy => "Copy selected entry?",
-            FileOperationKind::Move if source_parent == target_parent => "Rename selected entry?",
-            FileOperationKind::Move => "Move selected entry?",
-            FileOperationKind::Delete => "Delete selected entry?",
+            FileOperationKind::Copy if plural => "Copy selected files?",
+            FileOperationKind::Copy => "Copy selected file?",
+            FileOperationKind::Move if !plural && source_parent == target_parent => "Rename selected file?",
+            FileOperationKind::Move if plural => "Move selected files?",
+            FileOperationKind::Move => "Move selected file?",
+            FileOperationKind::Delete if plural => "Delete selected files?",
+            FileOperationKind::Delete => "Delete selected file?",
         }
     }
 
     fn name_prompt_title(self) -> &'static str {
         match self {
-            FileOperationKind::Copy => "Copy selected entry as",
-            FileOperationKind::Move => "Rename selected entry to",
-            FileOperationKind::Delete => "Delete selected entry",
+            FileOperationKind::Copy => "Copy selected file as",
+            FileOperationKind::Move => "Rename selected file to",
+            FileOperationKind::Delete => "Delete selected file",
+        }
+    }
+}
+
+impl PendingFileOperation {
+    fn single_source(&self) -> Option<&Path> {
+        match self.sources.as_slice() {
+            [source] => Some(source.as_path()),
+            _ => None,
+        }
+    }
+
+    fn source_parent(&self) -> Option<&Path> {
+        self.single_source().and_then(Path::parent)
+    }
+
+    fn target_name(&self) -> Option<&Path> {
+        self.target_name.as_deref()
+    }
+
+    fn result_paths(&self) -> Vec<PathBuf> {
+        match self.kind {
+            FileOperationKind::Delete => Vec::new(),
+            FileOperationKind::Copy | FileOperationKind::Move => {
+                let Some(target_dir) = self.target_dir.as_deref() else {
+                    return Vec::new();
+                };
+                if self.sources.len() == 1 {
+                    let Some(name) = self
+                        .target_name()
+                        .or_else(|| self.sources.first().and_then(|path| path.file_name()).map(Path::new))
+                    else {
+                        return Vec::new();
+                    };
+                    vec![target_dir.join(name)]
+                } else {
+                    self.sources
+                        .iter()
+                        .filter_map(|source| source.file_name().map(|name| target_dir.join(name)))
+                        .collect()
+                }
+            }
+        }
+    }
+
+    fn success_message(&self) -> String {
+        let count = self.sources.len();
+        if count == 1 {
+            let source = self
+                .sources
+                .first()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default();
+            match self.kind {
+                FileOperationKind::Copy => format!("Copied {source}"),
+                FileOperationKind::Move if self.source_parent() == self.target_dir.as_deref() => {
+                    let target = self
+                        .result_paths()
+                        .first()
+                        .map(|path| path.display().to_string())
+                        .unwrap_or(source);
+                    format!("Renamed {} to {target}", self.sources[0].display())
+                }
+                FileOperationKind::Move => format!("Moved {source}"),
+                FileOperationKind::Delete => format!("Deleted {source}"),
+            }
+        } else {
+            match self.kind {
+                FileOperationKind::Copy => format!("Copied {count} files"),
+                FileOperationKind::Move => format!("Moved {count} files"),
+                FileOperationKind::Delete => format!("Deleted {count} files"),
+            }
+        }
+    }
+}
+
+fn perform_pending_file_operation(operation: &PendingFileOperation) -> io::Result<()> {
+    match operation.kind {
+        FileOperationKind::Delete => {
+            for source in &operation.sources {
+                remove_path(source)?;
+            }
+            Ok(())
+        }
+        FileOperationKind::Copy | FileOperationKind::Move => {
+            let Some(target_dir) = operation.target_dir.as_deref() else {
+                return Err(io::Error::other(match operation.kind {
+                    FileOperationKind::Copy => "copy target is missing",
+                    FileOperationKind::Move => "move target is missing",
+                    FileOperationKind::Delete => unreachable!(),
+                }));
+            };
+
+            for source in &operation.sources {
+                let target_name = if operation.sources.len() == 1 {
+                    operation
+                        .target_name()
+                        .or_else(|| source.file_name().map(Path::new))
+                } else {
+                    source.file_name().map(Path::new)
+                }
+                .ok_or_else(|| io::Error::other("file operation target name is missing"))?;
+
+                let target_path = target_dir.join(target_name);
+                if target_path.exists() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        format!("{} already exists", target_path.display()),
+                    ));
+                }
+
+                match operation.kind {
+                    FileOperationKind::Copy => copy_path(source, &target_path)?,
+                    FileOperationKind::Move => move_path(source, &target_path)?,
+                    FileOperationKind::Delete => unreachable!(),
+                }
+            }
+
+            Ok(())
         }
     }
 }
