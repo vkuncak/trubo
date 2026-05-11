@@ -91,6 +91,8 @@ const CURRENT_THEME: Theme = Theme {
 };
 
 const SECONDARY_BROWSER_GUTTER_WIDTH: u16 = 1;
+const FILE_OPERATION_DIALOG_WIDTH: u16 = 72;
+const FILE_CONFLICT_DIALOG_WIDTH: u16 = 76;
 const SECONDARY_BROWSER_HEADER_BINDINGS: [(&str, &str); 4] = [
     ("F5", " Copy  "),
     ("F6", " Move  "),
@@ -164,19 +166,29 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 draw_dialog(frame, app, dialog, anchored_file_operation_area(app, root, 60, 7))
             }
             Dialog::FileOperationName => {
-                draw_dialog(frame, app, dialog, anchored_file_operation_area(app, root, 42, 5))
+                draw_dialog(
+                    frame,
+                    app,
+                    dialog,
+                    anchored_file_operation_area(app, root, FILE_OPERATION_DIALOG_WIDTH, 5),
+                )
             }
             Dialog::ConfirmFileOperation => draw_dialog(
                 frame,
                 app,
                 dialog,
-                anchored_file_operation_area(app, root, 48, confirm_file_operation_dialog_height(app)),
+                anchored_file_operation_area(
+                    app,
+                    root,
+                    FILE_OPERATION_DIALOG_WIDTH,
+                    confirm_file_operation_dialog_height(app),
+                ),
             ),
             Dialog::ResolveFileConflict => draw_dialog(
                 frame,
                 app,
                 dialog,
-                anchored_file_operation_area(app, root, 58, 7),
+                anchored_file_operation_area(app, root, FILE_CONFLICT_DIALOG_WIDTH, 7),
             ),
         }
     }
