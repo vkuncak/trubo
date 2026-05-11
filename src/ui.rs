@@ -161,7 +161,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 draw_dialog(frame, app, dialog, anchored_search_area(app, root, 48, 5))
             }
             Dialog::BrowserSelectionPattern => {
-                draw_dialog(frame, app, dialog, anchored_file_operation_area(app, root, 52, 5))
+                draw_dialog(frame, app, dialog, anchored_file_operation_area(app, root, 60, 7))
             }
             Dialog::FileOperationName => {
                 draw_dialog(frame, app, dialog, anchored_file_operation_area(app, root, 42, 5))
@@ -1161,6 +1161,10 @@ fn draw_browser_selection_pattern_dialog(frame: &mut Frame, app: &App, area: Rec
             Span::styled("Pattern:", accent),
             Span::styled(" ", base),
             Span::styled(pattern.to_string(), base),
+        ]),
+        Line::from(vec![
+            Span::styled("Note:", accent),
+            Span::styled(" regex matches substrings; . matches any character; use \\. for a literal dot", base),
         ]),
         Line::from(vec![
             Span::styled("Enter", key),

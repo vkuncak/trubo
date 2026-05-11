@@ -311,6 +311,7 @@ pub const MIN_EDITOR_PANE_WIDTH: u16 = 24;
 const BROWSER_PANE_COUNT: usize = 2;
 const BROWSER_PREVIEW_DELAY: Duration = Duration::from_millis(200);
 const DIRECTORY_PREVIEW_MAX_ENTRIES: usize = 256;
+const DEFAULT_BROWSER_SELECTION_PATTERN: &str = r".*\..*";
 
 #[derive(Debug, Clone)]
 pub struct BrowserPane {
@@ -354,6 +355,7 @@ pub struct App {
     pending_file_operation: Option<PendingFileOperation>,
     pending_file_operation_name_input: TextInputState,
     search_pattern: String,
+    browser_selection_pattern: String,
     search_input: TextInputState,
     pending_browser_selection_pattern_mode: Option<BrowserSelectionPatternMode>,
     full_redraw_requested: bool,
@@ -397,6 +399,7 @@ impl App {
             pending_file_operation: None,
             pending_file_operation_name_input: TextInputState::default(),
             search_pattern: String::new(),
+            browser_selection_pattern: String::new(),
             search_input: TextInputState::default(),
             pending_browser_selection_pattern_mode: None,
             full_redraw_requested: false,
@@ -1297,7 +1300,12 @@ impl App {
         };
 
         self.pending_browser_selection_pattern_mode = Some(mode);
-        self.search_input.clear();
+        let initial_pattern = if self.browser_selection_pattern.is_empty() {
+            DEFAULT_BROWSER_SELECTION_PATTERN
+        } else {
+            self.browser_selection_pattern.as_str()
+        };
+        self.search_input.set_text(initial_pattern.to_string());
         self.dialog = Some(Dialog::BrowserSelectionPattern);
         self.status = match mode {
             BrowserSelectionPatternMode::Add => {
@@ -1654,6 +1662,7 @@ impl App {
                 return;
             }
         };
+        self.browser_selection_pattern = pattern.clone();
 
         let browser = &mut self.browsers[browser_index];
         let mut changed = 0usize;
