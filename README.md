@@ -1,5 +1,7 @@
 # trubo
 
+[![CI](https://github.com/vkuncak/trubo/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/vkuncak/trubo/actions/workflows/ci.yml)
+
 Text (Rust, Unicode, Basic) Operator
 
 trubo is an EXPERIMENTAL retro TUI text editor and file manager in Rust. 
