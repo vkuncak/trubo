@@ -1,0 +1,182 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Git ref to release. Defaults to the ref selected in the Actions UI.
+        required: false
+        type: string
+      tag:
+        description: Optional release tag. Defaults to release-<short-commit-hash>.
+        required: false
+        type: string
+      title:
+        description: Optional release title. Defaults to trubo <short-commit-hash>.
+        required: false
+        type: string
+      notes:
+        description: Optional release notes. Defaults to a generated commit-based note.
+        required: false
+        type: string
+      draft:
+        description: Create the release as a draft.
+        required: false
+        default: false
+        type: boolean
+      prerelease:
+        description: Mark the release as a prerelease.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY_NAME: trubo
+
+jobs:
+  prepare:
+    name: Prepare Release Metadata
+    runs-on: ubuntu-latest
+    outputs:
+      full_sha: ${{ steps.meta.outputs.full_sha }}
+      short_sha: ${{ steps.meta.outputs.short_sha }}
+      tag: ${{ steps.meta.outputs.tag }}
+      title: ${{ steps.meta.outputs.title }}
+      notes: ${{ steps.meta.outputs.notes }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.target || github.ref }}
+
+      - name: Compute release metadata
+        id: meta
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_TITLE: ${{ inputs.title }}
+          INPUT_NOTES: ${{ inputs.notes }}
+        run: |
+          full_sha="$(git rev-parse HEAD)"
+          short_sha="$(git rev-parse --short=12 HEAD)"
+
+          tag="${INPUT_TAG:-release-${short_sha}}"
+          title="${INPUT_TITLE:-trubo ${short_sha}}"
+          notes="${INPUT_NOTES:-Generated release for commit ${full_sha}.}"
+
+          {
+            echo "full_sha=${full_sha}"
+            echo "short_sha=${short_sha}"
+            echo "tag=${tag}"
+            echo "title=${title}"
+            echo "notes=${notes}"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.platform.label }})
+    needs: prepare
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - label: macos
+            runner: macos-latest
+          - label: ubuntu
+            runner: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.full_sha }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build output
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Package binary archive
+        shell: bash
+        env:
+          SHORT_SHA: ${{ needs.prepare.outputs.short_sha }}
+          PLATFORM_LABEL: ${{ matrix.platform.label }}
+        run: |
+          archive_name="${BINARY_NAME}-${SHORT_SHA}-${PLATFORM_LABEL}.tar.gz"
+          mkdir -p dist/package
+          cp "target/release/${BINARY_NAME}" "dist/package/${BINARY_NAME}"
+          chmod 755 "dist/package/${BINARY_NAME}"
+          tar -C dist/package -czf "dist/${archive_name}" "${BINARY_NAME}"
+
+      - name: Upload binary archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BINARY_NAME }}-${{ matrix.platform.label }}
+          path: dist/${{ env.BINARY_NAME }}-${{ needs.prepare.outputs.short_sha }}-${{ matrix.platform.label }}.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Publish Release
+    needs:
+      - prepare
+      - build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.full_sha }}
+
+      - name: Download binary archives
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/artifacts
+
+      - name: Create source archive
+        env:
+          SHORT_SHA: ${{ needs.prepare.outputs.short_sha }}
+          FULL_SHA: ${{ needs.prepare.outputs.full_sha }}
+        run: |
+          mkdir -p dist
+          git archive --format=tar.gz --output="dist/${BINARY_NAME}-${SHORT_SHA}-source.tar.gz" "${FULL_SHA}"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.prepare.outputs.tag }}
+          RELEASE_TITLE: ${{ needs.prepare.outputs.title }}
+          RELEASE_NOTES: ${{ needs.prepare.outputs.notes }}
+          DRAFT: ${{ inputs.draft }}
+          PRERELEASE: ${{ inputs.prerelease }}
+          SHORT_SHA: ${{ needs.prepare.outputs.short_sha }}
+        run: |
+          args=(
+            release create
+            "$TAG_NAME"
+            --title "$RELEASE_TITLE"
+            --notes "$RELEASE_NOTES"
+          )
+
+          if [[ "$DRAFT" == "true" ]]; then
+            args+=(--draft)
+          fi
+
+          if [[ "$PRERELEASE" == "true" ]]; then
+            args+=(--prerelease)
+          fi
+
+          args+=(
+            "dist/${BINARY_NAME}-${SHORT_SHA}-source.tar.gz"
+            "dist/artifacts/${BINARY_NAME}-macos/${BINARY_NAME}-${SHORT_SHA}-macos.tar.gz"
+            "dist/artifacts/${BINARY_NAME}-ubuntu/${BINARY_NAME}-${SHORT_SHA}-ubuntu.tar.gz"
+          )
+
+          gh "${args[@]}"
