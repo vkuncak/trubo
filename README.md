@@ -41,6 +41,15 @@ That documentation is the source of truth for:
 - the (rudimentary!) run/build behavior 
 - editor features and limitations
 
+## Continuous Integration
+
+GitHub Actions is configured to run `cargo test --all-targets` on Linux and
+macOS for pushes to `main`, pull requests, and manual runs.
+
+For public repositories, this is generally free within GitHub's hosted Actions
+offering. If the repository is private, GitHub applies monthly runner-minute
+limits, so this setup keeps CI intentionally lightweight.
+
 ## Quick Start
 
 The most important keys are:
