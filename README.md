@@ -81,3 +81,6 @@ File backups are saved using the `~` suffix.
 The file pane lists directories and all regular files. trubo opens files as
 lossy text regardless of extension.
 
+When the terminal reports Kitty, Sixel, or iTerm2 image support, image files
+are previewed directly in the editor pane instead of being shown as lossy text.
+

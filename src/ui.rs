@@ -4,6 +4,7 @@ use crate::app::{
 };
 use crate::file_types::{DEFAULT_KEYWORDS, FileTypeSpec, comment_start_for_line, detect_file_type};
 use std::path::Path;
+use ratatui_image::Image;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
@@ -195,11 +196,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 }
 
 fn draw_file_header(frame: &mut Frame, area: Rect, app: &App) {
-    let cursor_line = app.editor.cursor_row() + 1;
-    let cursor_col = app.editor.cursor_col() + 1;
-    let line_width = cursor_line.to_string().len().max(4);
-    let col_width = cursor_col.to_string().len().max(3);
-    let cursor_label = format!(" {:>line_width$}:{:>col_width$} ", cursor_line, cursor_col,);
+    let cursor_label = app.header_status_label();
     let base = Style::default()
         .fg(CURRENT_THEME.status_bar_fg)
         .bg(CURRENT_THEME.status_bar_bg)
@@ -240,7 +237,7 @@ fn build_header_left_spans(app: &App, width: u16, base: Style, key: Style) -> Ve
     let label = format!(
         " {} ({}){} ",
         app.current_file_label(),
-        app.editor.header_metric_label(),
+        app.current_metric_label(),
         dirty,
     );
     fit_header_segments(
@@ -723,6 +720,17 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
     let inner = block.inner(area);
     app.geometry.editor_inner = inner;
     frame.render_widget(block, area);
+
+    if app.is_image_preview_active() {
+        frame.render_widget(
+            Block::default().style(Style::default().bg(CURRENT_THEME.editor_text_bg)),
+            inner,
+        );
+        if let Some(image_protocol) = app.image_preview_protocol() {
+            frame.render_widget(Image::new(image_protocol).allow_clipping(true), inner);
+        }
+        return;
+    }
 
     let line_number_width = app.editor_line_number_width();
     let text_cols = inner.width.saturating_sub(line_number_width + 1).max(1) as usize;

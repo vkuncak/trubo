@@ -11,7 +11,6 @@ use std::{
     fs,
     io::{self, IsTerminal, Stdout},
     path::PathBuf,
-    time::Duration,
 };
 
 use app::{Action, App, Focus};
@@ -24,6 +23,7 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
+use ratatui_image::picker::{Picker, ProtocolType};
 
 type TerminalUi = Terminal<CrosstermBackend<Stdout>>;
 
@@ -46,7 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let target = target.canonicalize().unwrap_or(target);
 
     let mut terminal = setup_terminal()?;
-    let mut app = App::new(target.clone());
+    let mut app = App::with_image_support(target.clone(), detect_terminal_image_picker());
     app.refresh_browser();
     if target.is_file() {
         app.open_path(target);
@@ -117,6 +117,11 @@ fn setup_terminal() -> io::Result<TerminalUi> {
     Terminal::new(CrosstermBackend::new(stdout))
 }
 
+fn detect_terminal_image_picker() -> Option<Picker> {
+    let picker = Picker::from_query_stdio().ok()?;
+    (picker.protocol_type() != ProtocolType::Halfblocks).then_some(picker)
+}
+
 fn restore_terminal(terminal: &mut TerminalUi) -> io::Result<()> {
     disable_raw_mode()?;
     execute!(
@@ -129,29 +134,44 @@ fn restore_terminal(terminal: &mut TerminalUi) -> io::Result<()> {
 }
 
 fn run(terminal: &mut TerminalUi, app: &mut App) -> io::Result<()> {
-    loop {
-        app.tick_browser_preview();
-        if app.take_full_redraw_request() {
-            terminal.clear()?;
-        }
-        terminal.draw(|frame| ui::draw(frame, app))?;
+    let mut needs_draw = true;
 
-        if event::poll(Duration::from_millis(120))? {
+    loop {
+        if needs_draw {
+            if app.take_full_redraw_request() {
+                terminal.clear()?;
+            }
+            terminal.draw(|frame| ui::draw(frame, app))?;
+            needs_draw = false;
+        }
+
+        if event::poll(app.idle_poll_timeout())? {
             match event::read()? {
                 Event::Key(key) => {
                     if handle_key(app, key) == Action::Quit {
                         break;
                     }
+                    needs_draw = true;
                 }
                 Event::Mouse(mouse) => {
                     if app.handle_mouse(mouse) == Action::Quit {
                         break;
                     }
+                    needs_draw = true;
                 }
-                Event::Paste(text) => app.paste_text(&text),
-                Event::Resize(_, _) => {}
-                _ => {}
+                Event::Paste(text) => {
+                    app.paste_text(&text);
+                    needs_draw = true;
+                }
+                Event::Resize(_, _) => {
+                    needs_draw = true;
+                }
+                _ => {
+                    needs_draw = true;
+                }
             }
+        } else if app.tick_browser_preview() {
+            needs_draw = true;
         }
     }
 

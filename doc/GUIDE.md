@@ -48,6 +48,7 @@ When the files pane is focused, `trubo` also previews the selected entry after a
 
 - files are previewed directly in the editor area
 - directories are previewed as a text tree
+- image files are rendered graphically when the terminal reports Kitty, Sixel, or iTerm2 image support
 
 This is useful for scanning a directory without opening each file permanently.
 
@@ -212,6 +213,8 @@ Copy, cut, and paste use the system clipboard, not an internal clipboard only.
 ### Binary-tolerant loading
 
 If you open a non-text file, `trubo` still loads it as lossy text so you can inspect its contents. The header switches from a line count to a byte count for that buffer.
+
+If the terminal supports a graphics protocol, common image files are opened and previewed as read-only images instead.
 
 ## Menus and dialogs
 

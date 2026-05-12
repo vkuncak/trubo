@@ -10,8 +10,10 @@ use std::{
 use std::process::Stdio;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use image::ImageReader;
 use regex::Regex;
-use ratatui::layout::Rect;
+use ratatui::layout::{Rect, Size};
+use ratatui_image::{FontSize, Resize, picker::{Picker, ProtocolType}, protocol::Protocol};
 
 use crate::{
     editor::{Editor, SaveOutcome},
@@ -312,6 +314,7 @@ const BROWSER_PANE_COUNT: usize = 2;
 const BROWSER_PREVIEW_DELAY: Duration = Duration::from_millis(200);
 const DIRECTORY_PREVIEW_MAX_ENTRIES: usize = 256;
 const DEFAULT_BROWSER_SELECTION_PATTERN: &str = r".*\..*";
+const MAX_IMAGE_PREVIEW_WIDTH_CHARS: u16 = 320;
 
 #[derive(Debug, Clone)]
 pub struct BrowserPane {
@@ -332,7 +335,16 @@ impl BrowserPane {
     }
 }
 
-#[derive(Debug)]
+enum EditorContent {
+    Text,
+    DirectoryPreview { label: String },
+    ImagePreview {
+        path: PathBuf,
+        protocol_name: &'static str,
+        protocol: Protocol,
+    },
+}
+
 pub struct App {
     pub browsers: [BrowserPane; BROWSER_PANE_COUNT],
     pub secondary_browser_enabled: bool,
@@ -348,7 +360,7 @@ pub struct App {
     pub status: String,
     pub browser_pane_width: u16,
     pub geometry: Geometry,
-    preview_label: Option<String>,
+    content: EditorContent,
     pending_unsaved_action: Option<PendingUnsavedAction>,
     pending_new_directory_browser: Option<usize>,
     new_directory_input: TextInputState,
@@ -361,10 +373,16 @@ pub struct App {
     full_redraw_requested: bool,
     browser_preview_due_at: Option<Instant>,
     drag_target: Option<DragTarget>,
+    image_picker: Option<Picker>,
 }
 
 impl App {
+    #[cfg(test)]
     pub fn new(start_path: PathBuf) -> Self {
+        Self::with_image_support(start_path, None)
+    }
+
+    pub fn with_image_support(start_path: PathBuf, image_picker: Option<Picker>) -> Self {
         let browser_dir = if start_path.is_dir() {
             start_path
         } else {
@@ -392,7 +410,7 @@ impl App {
             status: "Ready".to_string(),
             browser_pane_width: 30,
             geometry: Geometry::default(),
-            preview_label: None,
+            content: EditorContent::Text,
             pending_unsaved_action: None,
             pending_new_directory_browser: None,
             new_directory_input: TextInputState::default(),
@@ -405,6 +423,7 @@ impl App {
             full_redraw_requested: false,
             browser_preview_due_at: None,
             drag_target: None,
+            image_picker,
         }
     }
 
@@ -495,13 +514,13 @@ impl App {
         std::mem::take(&mut self.full_redraw_requested)
     }
 
-    pub fn tick_browser_preview(&mut self) {
+    pub fn tick_browser_preview(&mut self) -> bool {
         let Some(due) = self.browser_preview_due_at else {
-            return;
+            return false;
         };
 
         let Some(browser_index) = self.focus_browser_index() else {
-            return;
+            return false;
         };
 
         if Instant::now() < due
@@ -510,50 +529,76 @@ impl App {
             || self.dialog.is_some()
             || self.editor.is_dirty()
         {
-            return;
+            return false;
         }
 
         self.browser_preview_due_at = None;
 
         let browser = &self.browsers[browser_index];
         let Some(entry) = browser.entries.get(browser.selected_entry) else {
-            return;
+            return false;
         };
 
         if entry.kind == ProjectEntryKind::Parent {
             self.status = "Directory Up".to_string();
-            return;
+            return true;
         }
 
         if entry.kind == ProjectEntryKind::Directory {
             let preview_label = format!("{} [tree]", entry.path.display());
-            if self.preview_label.as_deref() == Some(preview_label.as_str()) {
-                return;
+            if matches!(
+                &self.content,
+                EditorContent::DirectoryPreview { label } if label == &preview_label
+            ) {
+                return false;
             }
 
             self.editor = Editor::from_lines(directory_subtree_lines(
                 &entry.path,
                 DIRECTORY_PREVIEW_MAX_ENTRIES,
             ));
-            self.preview_label = Some(preview_label);
+            self.content = EditorContent::DirectoryPreview {
+                label: preview_label,
+            };
             self.status = format!("Previewed tree for {}", entry.path.display());
-            return;
+            return true;
         }
 
-        if self.editor.path() == Some(entry.path.as_path()) {
-            return;
+        if self.current_content_path() == Some(entry.path.as_path()) {
+            return false;
         }
 
         let path = entry.path.clone();
+        if let Some((protocol_name, protocol)) = self.load_image_preview(&path) {
+            self.show_image_preview(path.clone(), protocol_name, protocol);
+            self.status = format!("Previewed {}", path.display());
+            return true;
+        }
+
         match Editor::open(&path) {
             Ok(editor) => {
-                self.editor = editor;
-                self.preview_label = None;
+                self.show_text_editor(editor);
                 self.status = format!("Previewed {}", path.display());
+                true
             }
             Err(error) => {
                 self.status = format!("Preview failed: {error}");
+                true
             }
+        }
+    }
+
+    pub fn idle_poll_timeout(&self) -> Duration {
+        const DEFAULT_IDLE_POLL: Duration = Duration::from_millis(500);
+        let Some(due) = self.browser_preview_due_at else {
+            return DEFAULT_IDLE_POLL;
+        };
+
+        let now = Instant::now();
+        if due > now {
+            due.duration_since(now)
+        } else {
+            Duration::from_millis(120)
         }
     }
 
@@ -566,14 +611,52 @@ impl App {
     }
 
     pub fn current_file_label(&self) -> String {
-        if let Some(label) = &self.preview_label {
-            return label.clone();
+        match &self.content {
+            EditorContent::Text => self
+                .editor
+                .path()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "Untitled".to_string()),
+            EditorContent::DirectoryPreview { label } => label.clone(),
+            EditorContent::ImagePreview { path, .. } => path.display().to_string(),
         }
+    }
 
-        self.editor
-            .path()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "Untitled".to_string())
+    pub fn current_metric_label(&self) -> String {
+        match &self.content {
+            EditorContent::ImagePreview { protocol_name, .. } => {
+                format!("{} image", protocol_name)
+            }
+            EditorContent::Text | EditorContent::DirectoryPreview { .. } => {
+                self.editor.header_metric_label()
+            }
+        }
+    }
+
+    pub fn header_status_label(&self) -> String {
+        match &self.content {
+            EditorContent::ImagePreview { protocol_name, .. } => {
+                format!(" {} ", protocol_name)
+            }
+            EditorContent::Text | EditorContent::DirectoryPreview { .. } => {
+                let cursor_line = self.editor.cursor_row() + 1;
+                let cursor_col = self.editor.cursor_col() + 1;
+                let line_width = cursor_line.to_string().len().max(4);
+                let col_width = cursor_col.to_string().len().max(3);
+                format!(" {:>line_width$}:{:>col_width$} ", cursor_line, cursor_col)
+            }
+        }
+    }
+
+    pub fn is_image_preview_active(&self) -> bool {
+        matches!(self.content, EditorContent::ImagePreview { .. })
+    }
+
+    pub fn image_preview_protocol(&self) -> Option<&Protocol> {
+        match &self.content {
+            EditorContent::ImagePreview { protocol, .. } => Some(protocol),
+            EditorContent::Text | EditorContent::DirectoryPreview { .. } => None,
+        }
     }
 
     pub fn save_file_dialog_title(&self) -> &'static str {
@@ -754,10 +837,16 @@ impl App {
     }
 
     fn apply_open_path(&mut self, path: PathBuf) {
+        if let Some((protocol_name, protocol)) = self.load_image_preview(&path) {
+            self.show_image_preview(path.clone(), protocol_name, protocol);
+            self.assign_focus(Focus::Editor);
+            self.status = format!("Opened {}", path.display());
+            return;
+        }
+
         match Editor::open(&path) {
             Ok(editor) => {
-                self.editor = editor;
-                self.preview_label = None;
+                self.show_text_editor(editor);
                 self.assign_focus(Focus::Editor);
                 self.status = format!("Opened {}", path.display());
             }
@@ -781,6 +870,10 @@ impl App {
 
     pub fn save_current(&mut self) -> bool {
         self.close_menu();
+        if !matches!(self.content, EditorContent::Text) {
+            self.status = "Preview buffers cannot be saved".to_string();
+            return false;
+        }
         match self.editor.save() {
             Ok(SaveOutcome::Saved) => {
                 self.refresh_buffers_after_save();
@@ -1875,6 +1968,10 @@ impl App {
     }
 
     fn handle_editor_key(&mut self, key: KeyEvent) {
+        if !matches!(self.content, EditorContent::Text) {
+            return;
+        }
+
         let selecting = key.modifiers.contains(KeyModifiers::SHIFT) || self.selection_mode;
         match key.code {
             KeyCode::Left if selecting => self.editor.extend_left(),
@@ -1984,6 +2081,41 @@ impl App {
         self.browser_preview_due_at = Some(Instant::now() + BROWSER_PREVIEW_DELAY);
     }
 
+    fn current_content_path(&self) -> Option<&Path> {
+        match &self.content {
+            EditorContent::Text => self.editor.path(),
+            EditorContent::DirectoryPreview { .. } => None,
+            EditorContent::ImagePreview { path, .. } => Some(path.as_path()),
+        }
+    }
+
+    fn show_text_editor(&mut self, editor: Editor) {
+        self.editor = editor;
+        self.content = EditorContent::Text;
+    }
+
+    fn show_image_preview(
+        &mut self,
+        path: PathBuf,
+        protocol_name: &'static str,
+        protocol: Protocol,
+    ) {
+        self.editor = Editor::scratch();
+        self.content = EditorContent::ImagePreview {
+            path,
+            protocol_name,
+            protocol,
+        };
+    }
+
+    fn load_image_preview(&self, path: &Path) -> Option<(&'static str, Protocol)> {
+        let picker = self.image_picker.as_ref()?;
+        let image = ImageReader::open(path).ok()?.decode().ok()?;
+        let protocol_name = protocol_name(picker.protocol_type());
+        let target_size = bounded_image_preview_size(&image, picker.font_size());
+        let protocol = picker.new_protocol(image, target_size, Resize::Fit(None)).ok()?;
+        Some((protocol_name, protocol))
+    }
     fn select_entry_at(&mut self, browser_index: usize, row: u16) {
         let browser = &self.browsers[browser_index];
         if browser.entries.is_empty() {
@@ -2756,4 +2888,26 @@ fn menu_dropdown_item_at(
     let item_index = row.saturating_sub(inner_y) as usize;
     let item = MENUS[active_menu].items.get(item_index)?;
     (!item.separator).then_some((active_menu, item_index))
+}
+
+fn protocol_name(protocol_type: ProtocolType) -> &'static str {
+    match protocol_type {
+        ProtocolType::Halfblocks => "Halfblocks",
+        ProtocolType::Sixel => "Sixel",
+        ProtocolType::Kitty => "Kitty",
+        ProtocolType::Iterm2 => "iTerm2",
+    }
+}
+
+fn bounded_image_preview_size(image: &image::DynamicImage, font_size: FontSize) -> Size {
+    let width_cells = image.width().div_ceil(font_size.width as u32).max(1);
+    let height_cells = image.height().div_ceil(font_size.height as u32).max(1);
+    let bounded_width = width_cells.min(MAX_IMAGE_PREVIEW_WIDTH_CHARS as u32);
+
+    if bounded_width >= width_cells {
+        return Size::new(width_cells as u16, height_cells as u16);
+    }
+
+    let bounded_height = (height_cells * bounded_width).div_ceil(width_cells).max(1);
+    Size::new(bounded_width as u16, bounded_height as u16)
 }
