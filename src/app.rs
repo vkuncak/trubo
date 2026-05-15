@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeSet,
-    fs, io,
+    env, fs, io,
     path::{Path, PathBuf},
     process::Command,
     time::{Duration, Instant},
@@ -165,6 +165,7 @@ pub enum Dialog {
     About,
     SaveFile,
     NewDirectory,
+    OpenFilePath,
     RegexSearch,
     BrowserIncrementalSearch,
     BrowserSelectionPattern,
@@ -177,7 +178,7 @@ pub enum Dialog {
 enum PendingUnsavedAction {
     Quit,
     Focus(Focus),
-    OpenPath(PathBuf),
+    OpenPath { path: PathBuf, browser_index: usize },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -353,6 +354,8 @@ pub struct App {
     pending_unsaved_action: Option<PendingUnsavedAction>,
     pending_new_directory_browser: Option<usize>,
     new_directory_input: TextInputState,
+    pending_open_file_browser: Option<usize>,
+    open_file_input: TextInputState,
     pending_file_operation: Option<PendingFileOperation>,
     pending_file_operation_name_input: TextInputState,
     search_pattern: String,
@@ -399,6 +402,8 @@ impl App {
             pending_unsaved_action: None,
             pending_new_directory_browser: None,
             new_directory_input: TextInputState::default(),
+            pending_open_file_browser: None,
+            open_file_input: TextInputState::default(),
             pending_file_operation: None,
             pending_file_operation_name_input: TextInputState::default(),
             search_pattern: String::new(),
@@ -585,7 +590,7 @@ impl App {
         match self.pending_unsaved_action.as_ref() {
             Some(PendingUnsavedAction::Quit) => "Save File Before Exiting?",
             Some(PendingUnsavedAction::Focus(_)) => "Save File Before Changing Pane?",
-            Some(PendingUnsavedAction::OpenPath(_)) => "Save File Before Opening Another File?",
+            Some(PendingUnsavedAction::OpenPath { .. }) => "Save File Before Opening Another File?",
             None => "Save File?",
         }
     }
@@ -594,7 +599,7 @@ impl App {
         match self.pending_unsaved_action.as_ref() {
             Some(PendingUnsavedAction::Quit) => " = Save and exit",
             Some(PendingUnsavedAction::Focus(_)) => " = Save and change pane",
-            Some(PendingUnsavedAction::OpenPath(_)) => " = Save and open file",
+            Some(PendingUnsavedAction::OpenPath { .. }) => " = Save and open file",
             None => " = Save",
         }
     }
@@ -603,7 +608,7 @@ impl App {
         match self.pending_unsaved_action.as_ref() {
             Some(PendingUnsavedAction::Quit) => " = Exit without saving, changes lost!",
             Some(PendingUnsavedAction::Focus(_)) => " = Change pane without saving",
-            Some(PendingUnsavedAction::OpenPath(_)) => " = Open without saving, changes lost!",
+            Some(PendingUnsavedAction::OpenPath { .. }) => " = Open without saving, changes lost!",
             None => " = Continue without saving",
         }
     }
@@ -612,7 +617,7 @@ impl App {
         match self.pending_unsaved_action.as_ref() {
             Some(PendingUnsavedAction::Quit) => " = Stay in application and continue editing",
             Some(PendingUnsavedAction::Focus(_)) => " = Stay in editor and continue editing",
-            Some(PendingUnsavedAction::OpenPath(_)) => " = Stay on current file and continue editing",
+            Some(PendingUnsavedAction::OpenPath { .. }) => " = Stay on current file and continue editing",
             None => " = Continue editing",
         }
     }
@@ -690,6 +695,22 @@ impl App {
         }
     }
 
+    pub fn open_file_input(&self) -> Option<&str> {
+        if self.pending_open_file_browser.is_some() {
+            Some(self.open_file_input.as_str())
+        } else {
+            None
+        }
+    }
+
+    pub fn open_file_input_cursor(&self) -> Option<usize> {
+        if self.pending_open_file_browser.is_some() {
+            Some(self.open_file_input.cursor())
+        } else {
+            None
+        }
+    }
+
     pub fn search_pattern(&self) -> &str {
         self.search_input.as_str()
     }
@@ -746,25 +767,60 @@ impl App {
             return;
         }
 
-        self.open_path(entry.path);
+        self.open_path_in_browser(browser_index, entry.path);
     }
 
     pub fn open_path(&mut self, path: PathBuf) {
+        let browser_index = self.focus_browser_index().unwrap_or(0);
+        self.open_path_in_browser(browser_index, path);
+    }
+
+    fn open_path_in_browser(&mut self, browser_index: usize, path: PathBuf) {
         if self.editor.is_dirty() {
-            self.request_unsaved_action(PendingUnsavedAction::OpenPath(path));
+            self.request_unsaved_action(PendingUnsavedAction::OpenPath { path, browser_index });
             return;
         }
 
-        self.apply_open_path(path);
+        self.apply_open_path(browser_index, path);
     }
 
-    fn apply_open_path(&mut self, path: PathBuf) {
+    fn apply_open_path(&mut self, browser_index: usize, path: PathBuf) {
+        let created = if path.exists() {
+            false
+        } else {
+            match fs::write(&path, "") {
+                Ok(()) => true,
+                Err(error) => {
+                    self.status = format!("Open failed: {error}");
+                    return;
+                }
+            }
+        };
+
+        let path = path.canonicalize().unwrap_or(path);
+        if let Some(parent) = path.parent() {
+            self.navigate_to_dir(browser_index, parent.to_path_buf(), Some(&path));
+            if created {
+                for other_index in 0..self.visible_browser_count() {
+                    if other_index == browser_index || self.browsers[other_index].dir != parent {
+                        continue;
+                    }
+                    self.refresh_browser_pane(other_index);
+                    self.select_entry_for_path(other_index, &path);
+                }
+            }
+        }
+
         match Editor::open(&path) {
             Ok(editor) => {
                 self.editor = editor;
                 self.preview_label = None;
                 self.assign_focus(Focus::Editor);
-                self.status = format!("Opened {}", path.display());
+                self.status = if created {
+                    format!("Opened new {}", path.display())
+                } else {
+                    format!("Opened {}", path.display())
+                };
             }
             Err(error) => self.status = format!("Open failed: {error}"),
         }
@@ -938,6 +994,18 @@ impl App {
                     Action::None
                 }
                 _ => handle_text_input_key(&mut self.new_directory_input, _key),
+            },
+            Dialog::OpenFilePath => match _key.code {
+                KeyCode::Enter => {
+                    self.confirm_open_file_dialog();
+                    Action::None
+                }
+                KeyCode::Esc => {
+                    self.clear_open_file_request();
+                    self.status = "Open file cancelled".to_string();
+                    Action::None
+                }
+                _ => handle_text_input_key(&mut self.open_file_input, _key),
             },
             Dialog::RegexSearch => match _key.code {
                 KeyCode::Enter => {
@@ -1304,6 +1372,15 @@ impl App {
         self.status = format!("New sub-directory in {}", self.browser_label(browser_index));
     }
 
+    pub fn request_open_file_dialog(&mut self) {
+        self.close_menu();
+        let browser_index = self.focus_browser_index().unwrap_or(0);
+        self.pending_open_file_browser = Some(browser_index);
+        self.open_file_input.clear();
+        self.dialog = Some(Dialog::OpenFilePath);
+        self.status = format!("Open file in {}", self.browser_label(browser_index));
+    }
+
     pub fn request_regex_search(&mut self) {
         self.close_menu();
         self.assign_focus(Focus::Editor);
@@ -1646,6 +1723,68 @@ impl App {
         self.dialog = None;
         self.pending_new_directory_browser = None;
         self.new_directory_input.clear();
+    }
+
+    fn confirm_open_file_dialog(&mut self) {
+        let Some(browser_index) = self.pending_open_file_browser else {
+            self.dialog = None;
+            return;
+        };
+
+        let entered = self.open_file_input.as_str().trim().to_string();
+        if entered.is_empty() {
+            self.status = "Path cannot be empty".to_string();
+            return;
+        }
+
+        let Some(path) = self.resolve_open_file_input(browser_index, &entered) else {
+            return;
+        };
+
+        self.clear_open_file_request();
+        self.open_path_in_browser(browser_index, path);
+    }
+
+    fn clear_open_file_request(&mut self) {
+        self.dialog = None;
+        self.pending_open_file_browser = None;
+        self.open_file_input.clear();
+    }
+
+    fn resolve_open_file_input(&mut self, browser_index: usize, input: &str) -> Option<PathBuf> {
+        let expanded = match expand_tilde_path(input) {
+            Ok(path) => path,
+            Err(message) => {
+                self.status = message;
+                return None;
+            }
+        };
+
+        let path = if expanded.is_absolute() {
+            expanded
+        } else {
+            self.browsers[browser_index].dir.join(expanded)
+        };
+
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            self.status = "Path must end with a file name".to_string();
+            return None;
+        };
+        if file_name == "." || file_name == ".." {
+            self.status = "Path must end with a file name".to_string();
+            return None;
+        }
+
+        let Some(directory) = path.parent() else {
+            self.status = "Path must include a directory or file name".to_string();
+            return None;
+        };
+        if !directory.is_dir() {
+            self.status = format!("Directory not found: {}", directory.display());
+            return None;
+        }
+
+        Some(path)
     }
 
     fn confirm_regex_search(&mut self) {
@@ -2196,7 +2335,7 @@ impl App {
         let action_label = match &action {
             PendingUnsavedAction::Quit => "exit",
             PendingUnsavedAction::Focus(_) => "change pane",
-            PendingUnsavedAction::OpenPath(_) => "open another file",
+            PendingUnsavedAction::OpenPath { .. } => "open another file",
         };
         self.pending_unsaved_action = Some(action);
         self.dialog = Some(Dialog::SaveFile);
@@ -2215,8 +2354,8 @@ impl App {
                 self.apply_focus_change(focus);
                 Action::None
             }
-            Some(PendingUnsavedAction::OpenPath(path)) => {
-                self.apply_open_path(path);
+            Some(PendingUnsavedAction::OpenPath { path, browser_index }) => {
+                self.apply_open_path(browser_index, path);
                 Action::None
             }
             None => Action::None,
@@ -2552,6 +2691,23 @@ fn char_to_byte_index(value: &str, char_index: usize) -> usize {
         .unwrap_or(value.len())
 }
 
+fn expand_tilde_path(value: &str) -> Result<PathBuf, String> {
+    if value == "~" {
+        return env::var_os("HOME")
+            .map(PathBuf::from)
+            .ok_or_else(|| "Home directory is not available".to_string());
+    }
+
+    if let Some(stripped) = value.strip_prefix("~/") {
+        let home = env::var_os("HOME")
+            .map(PathBuf::from)
+            .ok_or_else(|| "Home directory is not available".to_string())?;
+        return Ok(home.join(stripped));
+    }
+
+    Ok(PathBuf::from(value))
+}
+
 fn handle_text_input_key(input: &mut TextInputState, key: KeyEvent) -> Action {
     match key.code {
         KeyCode::Backspace => input.delete_left(),
@@ -2841,14 +2997,85 @@ mod tests {
         assert_eq!(app.dialog, Some(Dialog::SaveFile));
         assert!(matches!(
             app.pending_unsaved_action,
-            Some(PendingUnsavedAction::OpenPath(ref path)) if path == &second
+            Some(PendingUnsavedAction::OpenPath {
+                path: ref pending_path,
+                browser_index: 0,
+            }) if pending_path == &second
         ));
         assert_eq!(app.confirm_save_file_dialog(false), Action::None);
         assert_eq!(app.dialog, None);
         assert_eq!(app.pending_unsaved_action, None);
-        assert_eq!(app.editor.path(), Some(second.as_path()));
+        let canonical_second = second.canonicalize().expect("canonical second path");
+        assert_eq!(app.editor.path(), Some(canonical_second.as_path()));
         assert_eq!(app.editor.lines(), &["beta".to_string()]);
         assert!(!app.editor.is_dirty());
+    }
+
+    #[test]
+    fn confirm_open_file_dialog_creates_and_opens_missing_file() {
+        let test_dir = TestDir::new();
+        let nested = test_dir.path().join("nested");
+        fs::create_dir(&nested).expect("create nested directory");
+
+        let mut app = App::new(test_dir.path().to_path_buf());
+        app.refresh_browser();
+        app.request_open_file_dialog();
+        app.open_file_input.set_text("nested/fresh.txt".to_string());
+
+        app.confirm_open_file_dialog();
+
+        let target = nested.join("fresh.txt");
+        assert!(target.exists());
+        let canonical_target = target.canonicalize().expect("canonical target path");
+        assert_eq!(app.editor.path(), Some(canonical_target.as_path()));
+        assert_eq!(app.browsers[0].dir, nested.canonicalize().expect("canonical nested path"));
+        assert_eq!(app.focus, Focus::Editor);
+    }
+
+    #[test]
+    fn open_file_dialog_accepts_absolute_paths() {
+        let test_dir = TestDir::new();
+        let target = test_dir.path().join("absolute.txt");
+
+        let mut app = App::new(test_dir.path().to_path_buf());
+        app.refresh_browser();
+        app.request_open_file_dialog();
+        app.open_file_input.set_text(target.display().to_string());
+
+        app.confirm_open_file_dialog();
+
+        let canonical_target = target.canonicalize().expect("canonical target path");
+        assert_eq!(app.editor.path(), Some(canonical_target.as_path()));
+    }
+
+    #[test]
+    fn open_file_dialog_expands_tilde_paths() {
+        let test_dir = TestDir::new();
+        let home = test_dir.path().join("home");
+        fs::create_dir(&home).expect("create home directory");
+
+        let original_home = env::var_os("HOME");
+        unsafe {
+            env::set_var("HOME", &home);
+        }
+
+        let mut app = App::new(test_dir.path().to_path_buf());
+        app.refresh_browser();
+        app.request_open_file_dialog();
+        app.open_file_input.set_text("~/tilde.txt".to_string());
+
+        app.confirm_open_file_dialog();
+
+        let target = home.join("tilde.txt");
+        let canonical_target = target.canonicalize().expect("canonical target path");
+        assert_eq!(app.editor.path(), Some(canonical_target.as_path()));
+
+        unsafe {
+            match original_home {
+                Some(value) => env::set_var("HOME", value),
+                None => env::remove_var("HOME"),
+            }
+        }
     }
 }
 

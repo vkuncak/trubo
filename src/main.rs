@@ -204,7 +204,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
                 app.save_current();
             }
             KeyCode::Char('f') | KeyCode::Char('F') => app.request_search(),
-            KeyCode::Char('o') | KeyCode::Char('O') => app.open_selected_file(),
+            KeyCode::Char('o') | KeyCode::Char('O') => app.request_open_file_dialog(),
             KeyCode::Char('r') | KeyCode::Char('R') => app.run_current_target(),
             KeyCode::Char('b') | KeyCode::Char('B') => app.toggle_editor_only_mode(),
             _ => {}

@@ -159,6 +159,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             Dialog::About => draw_dialog(frame, app, dialog, centered(root, 60, 10)),
             Dialog::SaveFile => draw_dialog(frame, app, dialog, centered(root, 72, 10)),
             Dialog::NewDirectory => draw_dialog(frame, app, dialog, centered(root, 76, 12)),
+                Dialog::OpenFilePath => draw_dialog(frame, app, dialog, centered(root, 76, 12)),
             Dialog::RegexSearch => {
                 draw_dialog(frame, app, dialog, anchored_search_area(app, root, 48, 5))
             }
@@ -915,7 +916,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         help_bindings_line(&[("Ctrl+Left", "Files pane"), ("Ctrl+Right", "Editor pane"), ("F10", "Menu")]),
         help_bindings_line(&[("F5", "Copy entry"), ("F6", "Move entry"), ("F7", "New sub-directory")]),
         help_bindings_line(&[("F8", "Delete entry"), ("F9", "Build current file"), ("Ctrl+Q", "Quit")]),
-        help_bindings_line(&[("Ctrl+S", "Save"), ("Ctrl+O", "Open selected file"), ("Ctrl+F", "Search")]),
+        help_bindings_line(&[("Ctrl+S", "Save"), ("Ctrl+O", "Open file"), ("Ctrl+F", "Search")]),
         help_bindings_line(&[("Ctrl+L", "Redraw screen"), ("Ctrl+R", "Run current file"), ("Ctrl+B", "Editor only")]),
         help_bindings_line(&[("`", "Toggle dual pane")]),
         help_bindings_line(&[("Ctrl+T/Ins", "Mark/unmark entry")]),
@@ -992,6 +993,7 @@ fn draw_dialog(frame: &mut Frame, app: &App, dialog: Dialog, area: Rect) {
         Dialog::About => draw_about_dialog(frame, area),
         Dialog::SaveFile => draw_save_file_dialog(frame, app, area),
         Dialog::NewDirectory => draw_new_directory_dialog(frame, app, area),
+        Dialog::OpenFilePath => draw_open_file_dialog(frame, app, area),
         Dialog::RegexSearch => draw_regex_search_dialog(frame, app, area),
         Dialog::BrowserIncrementalSearch => draw_browser_incremental_search_dialog(frame, app, area),
         Dialog::BrowserSelectionPattern => draw_browser_selection_pattern_dialog(frame, app, area),
@@ -1107,6 +1109,68 @@ fn draw_new_directory_dialog(frame: &mut Frame, app: &App, area: Rect) {
         app.pending_new_directory_name().unwrap_or_default().chars().count(),
         "Create",
     );
+}
+
+fn draw_open_file_dialog(frame: &mut Frame, app: &App, area: Rect) {
+    let value = app.open_file_input().unwrap_or_default();
+
+    let base = Style::default()
+        .fg(CURRENT_THEME.status_bar_fg)
+        .bg(CURRENT_THEME.dialog_background);
+    let accent = base.add_modifier(Modifier::BOLD);
+    let key = Style::default()
+        .fg(CURRENT_THEME.status_hotkey_fg)
+        .bg(CURRENT_THEME.dialog_background)
+        .add_modifier(Modifier::BOLD);
+
+    let content_area = draw_dialog_shell(frame, area).inner(Margin {
+        vertical: 0,
+        horizontal: 1,
+    });
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![Span::styled("Open file", key)]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Path:", accent),
+            Span::styled(" ", base),
+            Span::styled(value.to_string(), base),
+        ]),
+        Line::from(vec![
+            Span::styled("Examples:", accent),
+            Span::styled(" src/main.rs  /tmp/log.txt  ~/notes/todo.txt", base),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Enter", key),
+            Span::styled(" open  ", base),
+            Span::styled("Esc", key),
+            Span::styled(" cancel", base),
+        ]),
+    ];
+
+    frame.render_widget(
+        Paragraph::new(Text::from(lines))
+            .style(Style::default().bg(CURRENT_THEME.dialog_background))
+            .alignment(Alignment::Left)
+            .wrap(Wrap { trim: true }),
+        content_area,
+    );
+
+    let label_width = "Path: ".chars().count();
+    let cursor_col = app.open_file_input_cursor().unwrap_or(value.chars().count());
+    let row_offset = 3;
+    let cursor_x = content_area
+        .x
+        .saturating_add(label_width as u16)
+        .saturating_add(cursor_col as u16);
+    let cursor_y = content_area.y.saturating_add(row_offset);
+    if cursor_x < content_area.x.saturating_add(content_area.width)
+        && cursor_y < content_area.y.saturating_add(content_area.height)
+    {
+        frame.set_cursor_position((cursor_x, cursor_y));
+    }
 }
 
 fn draw_regex_search_dialog(frame: &mut Frame, app: &App, area: Rect) {
