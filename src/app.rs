@@ -1964,9 +1964,12 @@ impl App {
         }
 
         let completion = entry.label.clone();
+        let completed_label = entry.label.clone();
         let updated = complete_open_file_input(self.open_file_input.as_str(), &completion);
         self.open_file_input.set_text(updated);
-        self.status = format!("Completed {}", entry.label);
+        self.update_open_file_dialog_browser();
+        self.update_open_file_dialog_browser_selection();
+        self.status = format!("Completed {completed_label}");
     }
 
     fn resolve_open_file_dialog_directory(&self, browser_index: usize, input: &str) -> Option<PathBuf> {
@@ -3482,7 +3485,8 @@ mod tests {
     #[test]
     fn open_file_dialog_tab_completes_selected_directory_with_trailing_slash() {
         let test_dir = TestDir::new();
-        fs::create_dir(test_dir.path().join("nested")).expect("create nested directory");
+        let nested = test_dir.path().join("nested");
+        fs::create_dir(&nested).expect("create nested directory");
 
         let mut app = App::new(test_dir.path().to_path_buf());
         app.refresh_browser();
@@ -3492,6 +3496,7 @@ mod tests {
         app.handle_dialog_key(KeyEvent::from(KeyCode::Tab));
 
         assert_eq!(app.open_file_input.as_str(), "nested/");
+        assert_eq!(app.browsers[0].dir, nested.canonicalize().expect("canonical nested path"));
     }
 
     #[test]
