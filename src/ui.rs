@@ -48,6 +48,7 @@ struct Theme {
     editor_identifier_fg: Color,
     editor_line_number_fg: Color,
     editor_line_number_bg: Color,
+    editor_current_line_bg: Color,
     editor_selection_bg: Color,
 }
 
@@ -87,6 +88,7 @@ const CURRENT_THEME: Theme = Theme {
     editor_identifier_fg: Color::Rgb(0, 5, 0),
     editor_line_number_fg: Color::Rgb(0, 60, 0),
     editor_line_number_bg: Color::Rgb(200, 200, 200),
+    editor_current_line_bg: Color::Rgb(200, 250, 250),
     editor_selection_bg: Color::Rgb(180, 240, 240),
 };
 
@@ -115,12 +117,14 @@ enum TokenKind {
     Identifier,
     Keyword,
     Comment,
+    Title,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct RunStyle {
     token: TokenKind,
     selected: bool,
+    current_line: bool,
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
@@ -759,6 +763,7 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
                 }
 
                 let mut spans = Vec::new();
+                let current_line = file_row == app.editor.cursor_row();
                 let number = if segment == 0 {
                     format!(
                         "{:>width$} ",
@@ -772,7 +777,11 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
                     number,
                     Style::default()
                         .fg(CURRENT_THEME.editor_line_number_fg)
-                        .bg(CURRENT_THEME.editor_line_number_bg),
+                        .bg(if current_line {
+                            CURRENT_THEME.editor_current_line_bg
+                        } else {
+                            CURRENT_THEME.editor_line_number_bg
+                        }),
                 ));
 
                 spans.extend(render_editor_segment(
@@ -781,6 +790,7 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
                     text_cols,
                     selection,
                     full_width_selected,
+                    current_line,
                     &token_kinds,
                 ));
 
@@ -1707,6 +1717,7 @@ fn render_editor_segment(
     text_cols: usize,
     selection: Option<(usize, usize)>,
     full_width_selected: bool,
+    current_line: bool,
     token_kinds: &[TokenKind],
 ) -> Vec<Span<'static>> {
     let chars = line
@@ -1730,6 +1741,7 @@ fn render_editor_segment(
         let style = RunStyle {
             token,
             selected,
+            current_line,
         };
 
         if run_style == Some(style) || run_style.is_none() {
@@ -1742,6 +1754,7 @@ fn render_editor_segment(
                 run_style.unwrap_or(RunStyle {
                     token: TokenKind::Plain,
                     selected: false,
+                    current_line,
                 }),
             );
             run.clear();
@@ -1757,6 +1770,7 @@ fn render_editor_segment(
             run_style.unwrap_or(RunStyle {
                 token: TokenKind::Plain,
                 selected: false,
+                current_line,
             }),
         );
     }
@@ -1771,6 +1785,7 @@ fn render_editor_segment(
                 RunStyle {
                     token: TokenKind::Plain,
                     selected: true,
+                    current_line,
                 },
             );
         }
@@ -1873,6 +1888,12 @@ fn tokenize_line(
 ) -> Vec<TokenKind> {
     let chars = line.chars().collect::<Vec<_>>();
     let mut kinds = vec![TokenKind::Plain; chars.len()];
+
+    if file_type.is_some_and(|spec| is_markdown_file(spec)) && is_markdown_heading(line) {
+        kinds.fill(TokenKind::Title);
+        return kinds;
+    }
+
     let comment_start = file_type.and_then(|spec| comment_start_for_line(spec, line));
     let comment_start_idx = comment_start.map(|start| line[..start].chars().count());
 
@@ -1909,6 +1930,16 @@ fn tokenize_line(
     kinds
 }
 
+fn is_markdown_file(file_type: &FileTypeSpec) -> bool {
+    matches!(file_type.extension, "md" | "markdown")
+}
+
+fn is_markdown_heading(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let hashes = trimmed.chars().take_while(|character| *character == '#').count();
+    hashes > 0 && trimmed.chars().nth(hashes) == Some(' ')
+}
+
 fn is_identifier_start(character: char) -> bool {
     character == '_' || character.is_ascii_alphabetic()
 }
@@ -1918,25 +1949,53 @@ fn is_identifier_continue(character: char) -> bool {
 }
 
 fn push_editor_run(spans: &mut Vec<Span<'static>>, run: &str, style: RunStyle) {
-    let mut rendered_style = match style.token {
+    let background = if style.selected {
+        CURRENT_THEME.editor_selection_bg
+    } else if style.current_line {
+        CURRENT_THEME.editor_current_line_bg
+    } else {
+        CURRENT_THEME.editor_text_bg
+    };
+
+    let rendered_style = match style.token {
         TokenKind::Comment => Style::default()
             .fg(CURRENT_THEME.editor_comment_fg)
-            .bg(CURRENT_THEME.editor_text_bg),
+            .bg(background),
         TokenKind::Identifier => Style::default()
             .fg(CURRENT_THEME.editor_identifier_fg)
-            .bg(CURRENT_THEME.editor_text_bg),
+            .bg(background),
         TokenKind::Keyword => Style::default()
             .fg(CURRENT_THEME.editor_text_fg)
-            .bg(CURRENT_THEME.editor_text_bg)
+            .bg(background)
+            .add_modifier(Modifier::BOLD),
+        TokenKind::Title => Style::default()
+            .fg(CURRENT_THEME.editor_text_fg)
+            .bg(background)
             .add_modifier(Modifier::BOLD),
         TokenKind::Plain => Style::default()
             .fg(CURRENT_THEME.editor_text_fg)
-            .bg(CURRENT_THEME.editor_text_bg),
+            .bg(background),
     };
 
-    if style.selected {
-        rendered_style = rendered_style.bg(CURRENT_THEME.editor_selection_bg);
+    spans.push(Span::styled(run.to_string(), rendered_style));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TokenKind, is_markdown_heading, tokenize_line};
+    use crate::file_types::file_type_for_extension;
+
+    #[test]
+    fn markdown_heading_lines_are_tokenized_as_titles() {
+        let spec = file_type_for_extension("md").expect("expected markdown file type");
+        let kinds = tokenize_line("## Heading", spec.keywords, Some(spec));
+
+        assert!(kinds.iter().all(|kind| *kind == TokenKind::Title));
     }
 
-    spans.push(Span::styled(run.to_string(), rendered_style));
+    #[test]
+    fn markdown_heading_detection_requires_space_after_hashes() {
+        assert!(is_markdown_heading("### Title"));
+        assert!(!is_markdown_heading("###Title"));
+    }
 }

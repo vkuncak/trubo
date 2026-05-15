@@ -245,6 +245,20 @@ const FILE_TYPES: &[FileTypeSpec] = &[
             pass_file_path: true,
         }),
     },
+    FileTypeSpec {
+        extension: "md",
+        keywords: DEFAULT_KEYWORDS,
+        comment_line_pattern: None,
+        run: None,
+        build: None,
+    },
+    FileTypeSpec {
+        extension: "markdown",
+        keywords: DEFAULT_KEYWORDS,
+        comment_line_pattern: None,
+        run: None,
+        build: None,
+    },
 ];
 
 pub const DEFAULT_KEYWORDS: &[&str] = &[];
@@ -401,6 +415,13 @@ mod tests {
         let spec = detect_file_type(Some(path), Some("#!/bin/bash"))
             .expect("expected shebang fallback");
         assert_eq!(spec.extension, "sh");
+    }
+
+    #[test]
+    fn detects_markdown_by_extension() {
+        let spec = detect_file_type(Some(Path::new("README.md")), None)
+            .expect("expected markdown detection");
+        assert_eq!(spec.extension, "md");
     }
 
     #[test]

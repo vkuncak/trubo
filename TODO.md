@@ -1,11 +1,5 @@
 # Possible Additional Functionality and Improvements
 
-## Dual Panel Dialog Improvement
-
-Dual panel dialogs are cut off to keep them concise.
-
-However, the display of file destination is important and should be enabled by expanding the width of the dialog box when appropriate. If the file name is too wide to display, it should be wrappend and not stripped.
-
 ## IU testing on Linux
 
 We should check how the app behaves on Linux.
