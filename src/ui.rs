@@ -88,7 +88,7 @@ const CURRENT_THEME: Theme = Theme {
     editor_identifier_fg: Color::Rgb(0, 5, 0),
     editor_line_number_fg: Color::Rgb(0, 60, 0),
     editor_line_number_bg: Color::Rgb(200, 200, 200),
-    editor_current_line_bg: Color::Rgb(200, 250, 250),
+    editor_current_line_bg: Color::Rgb(234, 230, 169),
     editor_selection_bg: Color::Rgb(180, 240, 240),
 };
 
@@ -763,7 +763,7 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
                 }
 
                 let mut spans = Vec::new();
-                let current_line = file_row == app.editor.cursor_row();
+                let current_line = app.highlight_current_line() && file_row == app.editor.cursor_row();
                 let number = if segment == 0 {
                     format!(
                         "{:>width$} ",
@@ -1775,7 +1775,7 @@ fn render_editor_segment(
         );
     }
 
-    if full_width_selected && text_cols > 0 {
+    if (full_width_selected || current_line) && text_cols > 0 {
         let rendered_cols = line.chars().skip(segment_start).take(text_cols).count();
         if rendered_cols < text_cols {
             let padding = " ".repeat(text_cols - rendered_cols);
@@ -1784,7 +1784,7 @@ fn render_editor_segment(
                 &padding,
                 RunStyle {
                     token: TokenKind::Plain,
-                    selected: true,
+                    selected: full_width_selected,
                     current_line,
                 },
             );
@@ -1982,7 +1982,7 @@ fn push_editor_run(spans: &mut Vec<Span<'static>>, run: &str, style: RunStyle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{TokenKind, is_markdown_heading, tokenize_line};
+    use super::{TokenKind, is_markdown_heading, render_editor_segment, tokenize_line};
     use crate::file_types::file_type_for_extension;
 
     #[test]
@@ -1997,5 +1997,13 @@ mod tests {
     fn markdown_heading_detection_requires_space_after_hashes() {
         assert!(is_markdown_heading("### Title"));
         assert!(!is_markdown_heading("###Title"));
+    }
+
+    #[test]
+    fn current_line_rendering_fills_empty_segment_width() {
+        let spans = render_editor_segment("", 0, 4, None, false, true, &[]);
+
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].content.as_ref(), "    ");
     }
 }

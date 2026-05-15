@@ -346,6 +346,7 @@ pub struct App {
     pub browsers: [BrowserPane; BROWSER_PANE_COUNT],
     pub secondary_browser_enabled: bool,
     pub editor_only_mode: bool,
+    pub highlight_current_line: bool,
     pub editor: Editor,
     pub focus: Focus,
     pub menu_open: bool,
@@ -397,6 +398,7 @@ impl App {
             ],
             secondary_browser_enabled: false,
             editor_only_mode: false,
+            highlight_current_line: true,
             editor: Editor::scratch(),
             focus: Focus::BrowserPrimary,
             menu_open: false,
@@ -458,6 +460,10 @@ impl App {
 
     pub fn focus_editor(&mut self) {
         self.set_focus(Focus::Editor);
+    }
+
+    pub fn highlight_current_line(&self) -> bool {
+        self.highlight_current_line
     }
 
     fn set_focus(&mut self, focus: Focus) {

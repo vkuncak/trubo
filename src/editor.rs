@@ -51,6 +51,7 @@ pub struct Editor {
     binary_size: Option<u64>,
     cursor_row: usize,
     cursor_col: usize,
+    preferred_visual_col: Option<usize>,
     row_offset: usize,
     row_segment_offset: usize,
     col_offset: usize,
@@ -70,6 +71,7 @@ impl Editor {
             binary_size: None,
             cursor_row: 0,
             cursor_col: 0,
+            preferred_visual_col: None,
             row_offset: 0,
             row_segment_offset: 0,
             col_offset: 0,
@@ -89,6 +91,7 @@ impl Editor {
             binary_size: None,
             cursor_row: 0,
             cursor_col: 0,
+            preferred_visual_col: None,
             row_offset: 0,
             row_segment_offset: 0,
             col_offset: 0,
@@ -110,6 +113,7 @@ impl Editor {
             binary_size,
             cursor_row: 0,
             cursor_col: 0,
+            preferred_visual_col: None,
             row_offset: 0,
             row_segment_offset: 0,
             col_offset: 0,
@@ -179,6 +183,7 @@ impl Editor {
         let position = self.clamp_position(Position { row, col });
         self.set_cursor_position(position);
         self.clear_selection();
+        self.preferred_visual_col = None;
         self.keep_cursor_visible();
     }
 
@@ -353,6 +358,7 @@ impl Editor {
         self.lines[self.cursor_row].insert(byte_idx, character);
         self.cursor_col += 1;
         self.dirty = true;
+        self.preferred_visual_col = None;
         self.keep_cursor_visible();
     }
 
@@ -388,6 +394,7 @@ impl Editor {
         }
 
         self.dirty = true;
+        self.preferred_visual_col = None;
         self.keep_cursor_visible();
     }
 
@@ -401,6 +408,7 @@ impl Editor {
         self.cursor_col = 0;
         self.lines.insert(self.cursor_row, remainder);
         self.dirty = true;
+        self.preferred_visual_col = None;
         self.keep_cursor_visible();
     }
 
@@ -427,6 +435,7 @@ impl Editor {
             self.lines[self.cursor_row].push_str(&current);
             self.dirty = true;
         }
+        self.preferred_visual_col = None;
         self.keep_cursor_visible();
     }
 
@@ -453,6 +462,7 @@ impl Editor {
             self.lines[self.cursor_row].push_str(&next);
             self.dirty = true;
         }
+        self.preferred_visual_col = None;
         self.keep_cursor_visible();
     }
 
@@ -468,6 +478,7 @@ impl Editor {
             self.clamp_col();
         }
         self.dirty = true;
+        self.preferred_visual_col = None;
         self.keep_cursor_visible();
     }
 
@@ -481,6 +492,7 @@ impl Editor {
         self.lines = state.lines;
         self.cursor_row = state.cursor_row;
         self.cursor_col = state.cursor_col;
+        self.preferred_visual_col = None;
         self.row_offset = state.row_offset;
         self.row_segment_offset = state.row_segment_offset;
         self.col_offset = state.col_offset;
@@ -500,6 +512,7 @@ impl Editor {
         self.lines = state.lines;
         self.cursor_row = state.cursor_row;
         self.cursor_col = state.cursor_col;
+        self.preferred_visual_col = None;
         self.row_offset = state.row_offset;
         self.row_segment_offset = state.row_segment_offset;
         self.col_offset = state.col_offset;
@@ -548,12 +561,24 @@ impl Editor {
     }
 
     fn move_cursor(&mut self, movement: Movement, selecting: bool) {
+        let vertical_motion = matches!(
+            movement,
+            Movement::Up | Movement::Down | Movement::PageUp(_) | Movement::PageDown(_)
+        );
         if selecting {
             if self.selection_anchor.is_none() {
                 self.begin_selection();
             }
         } else {
             self.clear_selection();
+        }
+
+        if vertical_motion {
+            let cols = self.viewport_cols.max(1);
+            self.preferred_visual_col
+                .get_or_insert(self.cursor_col % cols);
+        } else {
+            self.preferred_visual_col = None;
         }
 
         match movement {
@@ -581,6 +606,10 @@ impl Editor {
                     self.step_down();
                 }
             }
+        }
+
+        if !vertical_motion {
+            self.preferred_visual_col = None;
         }
 
         if selecting && self.selection_anchor == Some(self.current_position()) {
@@ -611,7 +640,7 @@ impl Editor {
     fn step_up(&mut self) {
         let cols = self.viewport_cols.max(1);
         let visual_segment = self.cursor_col / cols;
-        let visual_col = self.cursor_col % cols;
+        let visual_col = self.preferred_visual_col.unwrap_or(self.cursor_col % cols);
 
         if visual_segment > 0 {
             self.cursor_col = (visual_segment - 1) * cols + visual_col;
@@ -631,7 +660,7 @@ impl Editor {
     fn step_down(&mut self) {
         let cols = self.viewport_cols.max(1);
         let visual_segment = self.cursor_col / cols;
-        let visual_col = self.cursor_col % cols;
+        let visual_col = self.preferred_visual_col.unwrap_or(self.cursor_col % cols);
         let line_len = self.line_len(self.cursor_row);
         let visual_rows = wrapped_rows(line_len, cols);
 
@@ -668,6 +697,7 @@ impl Editor {
         self.set_cursor_position(start);
         self.clear_selection();
         self.dirty = true;
+        self.preferred_visual_col = None;
         self.keep_cursor_visible();
         true
     }
@@ -721,6 +751,7 @@ impl Editor {
         self.dirty = false;
 
         self.set_cursor_position(self.clamp_position(cursor));
+        self.preferred_visual_col = None;
         self.selection_anchor = selection_anchor.map(|anchor| self.clamp_position(anchor));
         if self.selection_anchor == Some(self.current_position()) {
             self.clear_selection();
@@ -1020,6 +1051,30 @@ mod tests {
         assert_eq!(editor.cursor_col(), 12);
         assert_eq!(editor.row_offset(), 0);
         assert_eq!(editor.row_segment_offset(), 1);
+    }
+
+    #[test]
+    fn vertical_motion_preserves_desired_column_across_short_lines() {
+        let mut editor = Editor::scratch();
+        editor.insert_text("abcd\n\nxyzw");
+        editor.set_viewport(10, 72);
+        editor.set_cursor(0, 3);
+
+        editor.move_down();
+        assert_eq!(editor.cursor_row(), 1);
+        assert_eq!(editor.cursor_col(), 0);
+
+        editor.move_down();
+        assert_eq!(editor.cursor_row(), 2);
+        assert_eq!(editor.cursor_col(), 3);
+
+        editor.move_up();
+        assert_eq!(editor.cursor_row(), 1);
+        assert_eq!(editor.cursor_col(), 0);
+
+        editor.move_up();
+        assert_eq!(editor.cursor_row(), 0);
+        assert_eq!(editor.cursor_col(), 3);
     }
 
     #[test]
