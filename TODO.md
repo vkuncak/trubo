@@ -1,8 +1,8 @@
 # Possible Additional Functionality and Improvements
 
-## IU testing on Linux
+## Selection lost
 
-We should check how the app behaves on Linux.
+When moving to the editor buffer the list of selected files is lost.
 
 ## Documentation changes
 
