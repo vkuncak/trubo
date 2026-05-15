@@ -162,6 +162,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             Dialog::RegexSearch => {
                 draw_dialog(frame, app, dialog, anchored_search_area(app, root, 48, 5))
             }
+            Dialog::BrowserIncrementalSearch => {
+                draw_dialog(frame, app, dialog, anchored_file_operation_area(app, root, 52, 5))
+            }
             Dialog::BrowserSelectionPattern => {
                 draw_dialog(frame, app, dialog, anchored_file_operation_area(app, root, 60, 7))
             }
@@ -912,7 +915,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         help_bindings_line(&[("Ctrl+Left", "Files pane"), ("Ctrl+Right", "Editor pane"), ("F10", "Menu")]),
         help_bindings_line(&[("F5", "Copy entry"), ("F6", "Move entry"), ("F7", "New sub-directory")]),
         help_bindings_line(&[("F8", "Delete entry"), ("F9", "Build current file"), ("Ctrl+Q", "Quit")]),
-        help_bindings_line(&[("Ctrl+S", "Save"), ("Ctrl+O", "Open selected file"), ("Ctrl+F", "Regex search")]),
+        help_bindings_line(&[("Ctrl+S", "Save"), ("Ctrl+O", "Open selected file"), ("Ctrl+F", "Search")]),
         help_bindings_line(&[("Ctrl+L", "Redraw screen"), ("Ctrl+R", "Run current file"), ("Ctrl+B", "Editor only")]),
         help_bindings_line(&[("`", "Toggle dual pane")]),
         help_bindings_line(&[("Ctrl+T/Ins", "Mark/unmark entry")]),
@@ -990,6 +993,7 @@ fn draw_dialog(frame: &mut Frame, app: &App, dialog: Dialog, area: Rect) {
         Dialog::SaveFile => draw_save_file_dialog(frame, app, area),
         Dialog::NewDirectory => draw_new_directory_dialog(frame, app, area),
         Dialog::RegexSearch => draw_regex_search_dialog(frame, app, area),
+        Dialog::BrowserIncrementalSearch => draw_browser_incremental_search_dialog(frame, app, area),
         Dialog::BrowserSelectionPattern => draw_browser_selection_pattern_dialog(frame, app, area),
         Dialog::FileOperationName => draw_file_operation_name_dialog(frame, app, area),
         Dialog::ConfirmFileOperation => draw_file_operation_dialog(frame, app, area),
@@ -1128,6 +1132,56 @@ fn draw_regex_search_dialog(frame: &mut Frame, app: &App, area: Rect) {
         Line::from(vec![
             Span::styled("Enter", key),
             Span::styled(" find next  ", base),
+            Span::styled("Esc", key),
+            Span::styled(" cancel", base),
+        ]),
+    ];
+
+    frame.render_widget(
+        Paragraph::new(Text::from(lines))
+            .style(Style::default().bg(CURRENT_THEME.dialog_background))
+            .alignment(Alignment::Left)
+            .wrap(Wrap { trim: true }),
+        content_area,
+    );
+
+    let cursor_x = content_area
+        .x
+        .saturating_add("Pattern: ".chars().count() as u16)
+        .saturating_add(app.search_pattern_cursor() as u16);
+    let cursor_y = content_area.y.saturating_add(1);
+    if cursor_x < content_area.x.saturating_add(content_area.width)
+        && cursor_y < content_area.y.saturating_add(content_area.height)
+    {
+        frame.set_cursor_position((cursor_x, cursor_y));
+    }
+}
+
+fn draw_browser_incremental_search_dialog(frame: &mut Frame, app: &App, area: Rect) {
+    let pattern = app.search_pattern();
+    let base = Style::default()
+        .fg(CURRENT_THEME.status_bar_fg)
+        .bg(CURRENT_THEME.dialog_background);
+    let accent = base.add_modifier(Modifier::BOLD);
+    let key = Style::default()
+        .fg(CURRENT_THEME.status_hotkey_fg)
+        .bg(CURRENT_THEME.dialog_background)
+        .add_modifier(Modifier::BOLD);
+
+    let content_area = draw_compact_dialog_shell(frame, area);
+
+    let lines = vec![
+        Line::from(vec![Span::styled("Incremental file search", key)]),
+        Line::from(vec![
+            Span::styled("Pattern:", accent),
+            Span::styled(" ", base),
+            Span::styled(pattern.to_string(), base),
+        ]),
+        Line::from(vec![
+            Span::styled("Type", key),
+            Span::styled(" to jump  ", base),
+            Span::styled("Enter", key),
+            Span::styled(" keep  ", base),
             Span::styled("Esc", key),
             Span::styled(" cancel", base),
         ]),

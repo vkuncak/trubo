@@ -166,6 +166,7 @@ pub enum Dialog {
     SaveFile,
     NewDirectory,
     RegexSearch,
+    BrowserIncrementalSearch,
     BrowserSelectionPattern,
     FileOperationName,
     ConfirmFileOperation,
@@ -357,6 +358,8 @@ pub struct App {
     search_pattern: String,
     browser_selection_pattern: String,
     search_input: TextInputState,
+    pending_browser_incremental_search_index: Option<usize>,
+    pending_browser_incremental_search_original_entry: Option<usize>,
     pending_browser_selection_pattern_mode: Option<BrowserSelectionPatternMode>,
     full_redraw_requested: bool,
     browser_preview_due_at: Option<Instant>,
@@ -401,6 +404,8 @@ impl App {
             search_pattern: String::new(),
             browser_selection_pattern: String::new(),
             search_input: TextInputState::default(),
+            pending_browser_incremental_search_index: None,
+            pending_browser_incremental_search_original_entry: None,
             pending_browser_selection_pattern_mode: None,
             full_redraw_requested: false,
             browser_preview_due_at: None,
@@ -946,6 +951,22 @@ impl App {
                 }
                 _ => handle_text_input_key(&mut self.search_input, _key),
             },
+            Dialog::BrowserIncrementalSearch => match _key.code {
+                KeyCode::Enter => {
+                    self.confirm_browser_incremental_search();
+                    Action::None
+                }
+                KeyCode::Esc => {
+                    self.clear_browser_incremental_search_request(true);
+                    self.status = "Incremental search cancelled".to_string();
+                    Action::None
+                }
+                _ => {
+                    handle_text_input_key(&mut self.search_input, _key);
+                    self.update_browser_incremental_search();
+                    Action::None
+                }
+            },
             Dialog::BrowserSelectionPattern => match _key.code {
                 KeyCode::Enter => {
                     self.confirm_browser_selection_pattern();
@@ -1126,7 +1147,7 @@ impl App {
             MenuAction::Copy => self.copy_selection(),
             MenuAction::Cut => self.cut_selection(),
             MenuAction::Paste => self.paste_from_clipboard(),
-            MenuAction::Search => self.request_regex_search(),
+            MenuAction::Search => self.request_search(),
             MenuAction::CopyEntry => self.request_copy_selected_entry(),
             MenuAction::MoveEntry => self.request_move_selected_entry(),
             MenuAction::NewDirectory => self.request_new_directory(),
@@ -1290,6 +1311,30 @@ impl App {
         self.search_input.set_text(self.search_pattern.clone());
         self.dialog = Some(Dialog::RegexSearch);
         self.status = "Enter regular expression to search".to_string();
+    }
+
+    pub fn request_search(&mut self) {
+        if self.focus_browser_index().is_some() {
+            self.request_browser_incremental_search();
+        } else {
+            self.request_regex_search();
+        }
+    }
+
+    fn request_browser_incremental_search(&mut self) {
+        self.close_menu();
+        let Some(browser_index) = self.focus_browser_index() else {
+            self.status = "Activate a files pane first".to_string();
+            return;
+        };
+
+        self.pending_browser_selection_pattern_mode = None;
+        self.pending_browser_incremental_search_index = Some(browser_index);
+        self.pending_browser_incremental_search_original_entry =
+            Some(self.browsers[browser_index].selected_entry);
+        self.search_input.clear();
+        self.dialog = Some(Dialog::BrowserIncrementalSearch);
+        self.status = "Incremental search: type to locate a file".to_string();
     }
 
     fn request_browser_selection_pattern(&mut self, mode: BrowserSelectionPatternMode) {
@@ -1635,6 +1680,83 @@ impl App {
         self.editor.select_to(row, end_col);
         self.editor.center_view_on(row, start_col);
         self.status = format!("Found /{pattern}/ at {}:{}", row + 1, start_col + 1);
+    }
+
+    fn confirm_browser_incremental_search(&mut self) {
+        let label = self
+            .pending_browser_incremental_search_index
+            .and_then(|browser_index| {
+                self.browsers[browser_index]
+                    .entries
+                    .get(self.browsers[browser_index].selected_entry)
+                    .map(|entry| entry.label.clone())
+            });
+        self.clear_browser_incremental_search_request(false);
+        if let Some(label) = label {
+            self.status = format!("Incremental search selected {label}");
+        } else {
+            self.status = "Incremental search closed".to_string();
+        }
+    }
+
+    fn clear_browser_incremental_search_request(&mut self, restore_selection: bool) {
+        if restore_selection
+            && let (Some(browser_index), Some(original_entry)) = (
+                self.pending_browser_incremental_search_index,
+                self.pending_browser_incremental_search_original_entry,
+            )
+        {
+            self.set_selected_entry(browser_index, original_entry);
+        }
+
+        self.dialog = None;
+        self.pending_browser_incremental_search_index = None;
+        self.pending_browser_incremental_search_original_entry = None;
+        self.search_input.clear();
+    }
+
+    fn update_browser_incremental_search(&mut self) {
+        let Some(browser_index) = self.pending_browser_incremental_search_index else {
+            return;
+        };
+
+        let query = self.search_input.as_str().trim().to_ascii_lowercase();
+        if query.is_empty() {
+            if let Some(original_entry) = self.pending_browser_incremental_search_original_entry {
+                self.set_selected_entry(browser_index, original_entry);
+            }
+            self.status = "Incremental search: type to locate a file".to_string();
+            return;
+        }
+
+        let entries = &self.browsers[browser_index].entries;
+        if entries.is_empty() {
+            self.status = "No files in this directory".to_string();
+            return;
+        }
+
+        let start = self.browsers[browser_index].selected_entry;
+        let mut found = None;
+        for offset in 0..entries.len() {
+            let index = (start + offset) % entries.len();
+            let entry = &entries[index];
+            if entry.kind == ProjectEntryKind::Parent {
+                continue;
+            }
+
+            if entry.label.to_ascii_lowercase().contains(&query) {
+                found = Some(index);
+                break;
+            }
+        }
+
+        if let Some(index) = found {
+            let label = entries[index].label.clone();
+            self.set_selected_entry(browser_index, index);
+            self.status = format!("Match: {label}");
+        } else {
+            self.status = format!("No files matching \"{query}\"");
+        }
     }
 
     fn confirm_browser_selection_pattern(&mut self) {
