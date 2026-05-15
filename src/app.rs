@@ -334,6 +334,13 @@ impl BrowserPane {
     }
 }
 
+#[derive(Debug, Clone)]
+struct OpenFileDialogBrowserState {
+    browser_index: usize,
+    dir: PathBuf,
+    selected_entry: usize,
+}
+
 #[derive(Debug)]
 pub struct App {
     pub browsers: [BrowserPane; BROWSER_PANE_COUNT],
@@ -355,6 +362,7 @@ pub struct App {
     pending_new_directory_browser: Option<usize>,
     new_directory_input: TextInputState,
     pending_open_file_browser: Option<usize>,
+    pending_open_file_browser_state: Option<OpenFileDialogBrowserState>,
     open_file_base_dir: Option<PathBuf>,
     open_file_input: TextInputState,
     last_active_browser_index: usize,
@@ -405,6 +413,7 @@ impl App {
             pending_new_directory_browser: None,
             new_directory_input: TextInputState::default(),
             pending_open_file_browser: None,
+            pending_open_file_browser_state: None,
             open_file_base_dir: None,
             open_file_input: TextInputState::default(),
             last_active_browser_index: 0,
@@ -1020,8 +1029,7 @@ impl App {
                     Action::None
                 }
                 KeyCode::Esc => {
-                    self.clear_open_file_request();
-                    self.status = "Open file cancelled".to_string();
+                    self.cancel_open_file_request();
                     Action::None
                 }
                 _ => {
@@ -1400,6 +1408,11 @@ impl App {
         self.close_menu();
         let browser_index = self.active_or_last_browser_index();
         self.pending_open_file_browser = Some(browser_index);
+        self.pending_open_file_browser_state = Some(OpenFileDialogBrowserState {
+            browser_index,
+            dir: self.browsers[browser_index].dir.clone(),
+            selected_entry: self.browsers[browser_index].selected_entry,
+        });
         self.open_file_base_dir = Some(self.browsers[browser_index].dir.clone());
         self.open_file_input.clear();
         self.dialog = Some(Dialog::OpenFilePath);
@@ -1789,8 +1802,19 @@ impl App {
     fn clear_open_file_request(&mut self) {
         self.dialog = None;
         self.pending_open_file_browser = None;
+        self.pending_open_file_browser_state = None;
         self.open_file_base_dir = None;
         self.open_file_input.clear();
+    }
+
+    fn cancel_open_file_request(&mut self) {
+        if let Some(state) = self.pending_open_file_browser_state.clone() {
+            self.navigate_to_dir(state.browser_index, state.dir, None);
+            self.set_selected_entry(state.browser_index, state.selected_entry);
+            self.assign_focus(Self::focus_for_browser_index(state.browser_index));
+        }
+        self.clear_open_file_request();
+        self.status = "Open file cancelled".to_string();
     }
 
     fn resolve_open_file_input(&mut self, browser_index: usize, input: &str) -> Option<PathBuf> {
@@ -1842,15 +1866,16 @@ impl App {
             return;
         };
 
-        let entered = self.open_file_input.as_str();
-        let Some(last_char) = entered.chars().last() else {
-            return;
-        };
-        if !std::path::is_separator(last_char) {
+        if self.open_file_input.as_str().trim().is_empty()
+            && let Some(state) = self.pending_open_file_browser_state.clone()
+            && state.browser_index == browser_index
+        {
+            self.navigate_to_dir(browser_index, state.dir, None);
+            self.set_selected_entry(browser_index, state.selected_entry);
             return;
         }
 
-        let Some(path) = self.resolve_open_file_dialog_directory(browser_index, entered) else {
+        let Some(path) = self.current_open_file_dialog_directory(browser_index) else {
             return;
         };
 
@@ -1859,8 +1884,13 @@ impl App {
             return;
         }
 
-        self.navigate_to_dir(browser_index, path, None);
-        self.status = format!("Open path browsing {}", self.browser_label(browser_index));
+        let current_dir = self.browsers[browser_index].dir.canonicalize().unwrap_or_else(|_| self.browsers[browser_index].dir.clone());
+        let desired_dir = path.canonicalize().unwrap_or(path);
+        if current_dir != desired_dir {
+            self.navigate_to_dir(browser_index, desired_dir, None);
+            self.status = format!("Open path browsing {}", self.browser_label(browser_index));
+            return;
+        }
     }
 
     fn update_open_file_dialog_browser_selection(&mut self) {
@@ -1951,6 +1981,28 @@ impl App {
         } else {
             base_dir.join(expanded)
         })
+    }
+
+    fn current_open_file_dialog_directory(&self, browser_index: usize) -> Option<PathBuf> {
+        let input = self.open_file_input.as_str().trim();
+        if input.is_empty() {
+            return self.open_file_base_dir.clone();
+        }
+
+        if !input.chars().last().is_some_and(std::path::is_separator)
+            && input.rfind(std::path::is_separator).is_none()
+        {
+            return self.open_file_base_dir.clone();
+        }
+
+        let value = if input.chars().last().is_some_and(std::path::is_separator) {
+            input
+        } else {
+            let separator_index = input.rfind(std::path::is_separator)?;
+            &input[..=separator_index]
+        };
+
+        self.resolve_open_file_dialog_directory(browser_index, value)
     }
 
     fn pending_open_file_browser_for_preview(&self) -> Option<usize> {
@@ -3303,6 +3355,79 @@ mod tests {
             app.browsers[0].dir.canonicalize().expect("canonical browser root"),
             test_dir.path().canonicalize().expect("canonical root path")
         );
+    }
+
+    #[test]
+    fn open_file_dialog_erasing_path_moves_browser_back_to_base_directory() {
+        let test_dir = TestDir::new();
+        let nested = test_dir.path().join("nested");
+        fs::create_dir(&nested).expect("create nested directory");
+
+        let mut app = App::new(test_dir.path().to_path_buf());
+        app.refresh_browser();
+        app.request_open_file_dialog();
+        app.open_file_input.set_text("nested/file.txt".to_string());
+        app.update_open_file_dialog_browser();
+        assert_eq!(app.browsers[0].dir, nested.canonicalize().expect("canonical nested path"));
+
+        app.open_file_input.set_text("file.txt".to_string());
+        app.update_open_file_dialog_browser();
+
+        assert_eq!(
+            app.browsers[0].dir.canonicalize().expect("canonical browser root"),
+            test_dir.path().canonicalize().expect("canonical root path")
+        );
+    }
+
+    #[test]
+    fn open_file_dialog_empty_input_restores_original_selection() {
+        let test_dir = TestDir::new();
+        fs::write(test_dir.path().join("alpha.txt"), "a").expect("write alpha file");
+        fs::write(test_dir.path().join("beta.txt"), "b").expect("write beta file");
+        let nested = test_dir.path().join("nested");
+        fs::create_dir(&nested).expect("create nested directory");
+
+        let mut app = App::new(test_dir.path().to_path_buf());
+        app.refresh_browser();
+        app.set_selected_entry(0, 2);
+        let original_selected = app.browsers[0].selected_entry;
+
+        app.request_open_file_dialog();
+        app.open_file_input.set_text("nested/file.txt".to_string());
+        app.update_open_file_dialog_browser();
+        app.open_file_input.clear();
+        app.update_open_file_dialog_browser();
+
+        assert_eq!(
+            app.browsers[0].dir.canonicalize().expect("canonical browser root"),
+            test_dir.path().canonicalize().expect("canonical root path")
+        );
+        assert_eq!(app.browsers[0].selected_entry, original_selected);
+    }
+
+    #[test]
+    fn open_file_dialog_escape_restores_original_browser_directory() {
+        let test_dir = TestDir::new();
+        let nested = test_dir.path().join("nested");
+        fs::create_dir(&nested).expect("create nested directory");
+        fs::write(test_dir.path().join("alpha.txt"), "a").expect("write alpha file");
+
+        let mut app = App::new(test_dir.path().to_path_buf());
+        app.refresh_browser();
+        app.set_selected_entry(0, 1);
+        let original_selected = app.browsers[0].selected_entry;
+
+        app.request_open_file_dialog();
+        app.open_file_input.set_text("nested/".to_string());
+        app.update_open_file_dialog_browser();
+        app.handle_dialog_key(KeyEvent::from(KeyCode::Esc));
+
+        assert_eq!(app.dialog, None);
+        assert_eq!(
+            app.browsers[0].dir.canonicalize().expect("canonical browser root"),
+            test_dir.path().canonicalize().expect("canonical root path")
+        );
+        assert_eq!(app.browsers[0].selected_entry, original_selected);
     }
 
     #[test]
