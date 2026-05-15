@@ -355,7 +355,9 @@ pub struct App {
     pending_new_directory_browser: Option<usize>,
     new_directory_input: TextInputState,
     pending_open_file_browser: Option<usize>,
+    open_file_base_dir: Option<PathBuf>,
     open_file_input: TextInputState,
+    last_active_browser_index: usize,
     pending_file_operation: Option<PendingFileOperation>,
     pending_file_operation_name_input: TextInputState,
     search_pattern: String,
@@ -403,7 +405,9 @@ impl App {
             pending_new_directory_browser: None,
             new_directory_input: TextInputState::default(),
             pending_open_file_browser: None,
+            open_file_base_dir: None,
             open_file_input: TextInputState::default(),
+            last_active_browser_index: 0,
             pending_file_operation: None,
             pending_file_operation_name_input: TextInputState::default(),
             search_pattern: String::new(),
@@ -467,6 +471,13 @@ impl App {
 
     fn assign_focus(&mut self, focus: Focus) {
         self.focus = focus;
+        match focus {
+            Focus::BrowserPrimary => self.last_active_browser_index = 0,
+            Focus::BrowserSecondary if self.secondary_browser_enabled => {
+                self.last_active_browser_index = 1
+            }
+            Focus::BrowserSecondary | Focus::Editor => {}
+        }
     }
 
     pub fn toggle_secondary_browser(&mut self) {
@@ -996,6 +1007,14 @@ impl App {
                 _ => handle_text_input_key(&mut self.new_directory_input, _key),
             },
             Dialog::OpenFilePath => match _key.code {
+                KeyCode::Down => {
+                    self.exit_open_file_dialog_to_browser(true);
+                    Action::None
+                }
+                KeyCode::Tab => {
+                    self.complete_open_file_dialog_from_browser();
+                    Action::None
+                }
                 KeyCode::Enter => {
                     self.confirm_open_file_dialog();
                     Action::None
@@ -1005,7 +1024,12 @@ impl App {
                     self.status = "Open file cancelled".to_string();
                     Action::None
                 }
-                _ => handle_text_input_key(&mut self.open_file_input, _key),
+                _ => {
+                    handle_text_input_key(&mut self.open_file_input, _key);
+                    self.update_open_file_dialog_browser();
+                    self.update_open_file_dialog_browser_selection();
+                    Action::None
+                }
             },
             Dialog::RegexSearch => match _key.code {
                 KeyCode::Enter => {
@@ -1374,8 +1398,9 @@ impl App {
 
     pub fn request_open_file_dialog(&mut self) {
         self.close_menu();
-        let browser_index = self.focus_browser_index().unwrap_or(0);
+        let browser_index = self.active_or_last_browser_index();
         self.pending_open_file_browser = Some(browser_index);
+        self.open_file_base_dir = Some(self.browsers[browser_index].dir.clone());
         self.open_file_input.clear();
         self.dialog = Some(Dialog::OpenFilePath);
         self.status = format!("Open file in {}", self.browser_label(browser_index));
@@ -1737,6 +1762,22 @@ impl App {
             return;
         }
 
+        if entered.chars().last().is_some_and(std::path::is_separator) {
+            let Some(directory) = self.resolve_open_file_dialog_directory(browser_index, &entered) else {
+                self.status = "Directory not found".to_string();
+                return;
+            };
+            if !directory.is_dir() {
+                self.status = format!("Directory not found: {}", directory.display());
+                return;
+            }
+
+            self.clear_open_file_request();
+            self.assign_focus(Self::focus_for_browser_index(browser_index));
+            self.status = format!("Browsing {}", self.browser_label(browser_index));
+            return;
+        }
+
         let Some(path) = self.resolve_open_file_input(browser_index, &entered) else {
             return;
         };
@@ -1748,6 +1789,7 @@ impl App {
     fn clear_open_file_request(&mut self) {
         self.dialog = None;
         self.pending_open_file_browser = None;
+        self.open_file_base_dir = None;
         self.open_file_input.clear();
     }
 
@@ -1760,10 +1802,14 @@ impl App {
             }
         };
 
+        let base_dir = self
+            .open_file_base_dir
+            .clone()
+            .unwrap_or_else(|| self.browsers[browser_index].dir.clone());
         let path = if expanded.is_absolute() {
             expanded
         } else {
-            self.browsers[browser_index].dir.join(expanded)
+            base_dir.join(expanded)
         };
 
         let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
@@ -1785,6 +1831,135 @@ impl App {
         }
 
         Some(path)
+    }
+
+    fn update_open_file_dialog_browser(&mut self) {
+        if self.editor_only_mode {
+            return;
+        }
+
+        let Some(browser_index) = self.pending_open_file_browser_for_preview() else {
+            return;
+        };
+
+        let entered = self.open_file_input.as_str();
+        let Some(last_char) = entered.chars().last() else {
+            return;
+        };
+        if !std::path::is_separator(last_char) {
+            return;
+        }
+
+        let Some(path) = self.resolve_open_file_dialog_directory(browser_index, entered) else {
+            return;
+        };
+
+        if !path.is_dir() {
+            self.status = format!("Directory not found: {}", path.display());
+            return;
+        }
+
+        self.navigate_to_dir(browser_index, path, None);
+        self.status = format!("Open path browsing {}", self.browser_label(browser_index));
+    }
+
+    fn update_open_file_dialog_browser_selection(&mut self) {
+        if self.editor_only_mode {
+            return;
+        }
+
+        let Some(browser_index) = self.pending_open_file_browser_for_preview() else {
+            return;
+        };
+
+        let Some(prefix) = self.open_file_dialog_file_prefix() else {
+            return;
+        };
+
+        let prefix = prefix.to_ascii_lowercase();
+        let Some(index) = self.browsers[browser_index].entries.iter().position(|entry| {
+            entry.kind != ProjectEntryKind::Parent
+                && entry.label.to_ascii_lowercase().starts_with(&prefix)
+        }) else {
+            return;
+        };
+
+        self.set_selected_entry(browser_index, index);
+        let label = self.browsers[browser_index].entries[index].label.clone();
+        self.status = format!("Match: {label}");
+    }
+
+    fn open_file_dialog_file_prefix(&self) -> Option<&str> {
+        let input = self.open_file_input.as_str();
+        let last_char = input.chars().last()?;
+        if std::path::is_separator(last_char) {
+            return None;
+        }
+
+        let prefix = input
+            .rsplit(std::path::is_separator)
+            .next()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())?;
+        Some(prefix)
+    }
+
+    fn exit_open_file_dialog_to_browser(&mut self, move_down: bool) {
+        let Some(browser_index) = self.pending_open_file_browser_for_preview() else {
+            return;
+        };
+
+        self.clear_open_file_request();
+        self.assign_focus(Self::focus_for_browser_index(browser_index));
+        if move_down {
+            self.select_next_entry(browser_index);
+        }
+        self.status = format!("Focus: {}", self.focus_name());
+    }
+
+    fn complete_open_file_dialog_from_browser(&mut self) {
+        let Some(browser_index) = self.pending_open_file_browser_for_preview() else {
+            return;
+        };
+
+        let Some(entry) = self.browsers[browser_index]
+            .entries
+            .get(self.browsers[browser_index].selected_entry)
+        else {
+            return;
+        };
+        if entry.kind == ProjectEntryKind::Parent {
+            self.status = "Parent entry cannot be used for completion".to_string();
+            return;
+        }
+
+        let completion = entry.label.clone();
+        let updated = complete_open_file_input(self.open_file_input.as_str(), &completion);
+        self.open_file_input.set_text(updated);
+        self.status = format!("Completed {}", entry.label);
+    }
+
+    fn resolve_open_file_dialog_directory(&self, browser_index: usize, input: &str) -> Option<PathBuf> {
+        let expanded = expand_tilde_path(input).ok()?;
+        let base_dir = self
+            .open_file_base_dir
+            .clone()
+            .unwrap_or_else(|| self.browsers[browser_index].dir.clone());
+
+        Some(if expanded.is_absolute() {
+            expanded
+        } else {
+            base_dir.join(expanded)
+        })
+    }
+
+    fn pending_open_file_browser_for_preview(&self) -> Option<usize> {
+        if self.editor_only_mode || self.visible_browser_count() == 0 {
+            return None;
+        }
+
+        let requested = self.pending_open_file_browser.unwrap_or(self.last_active_browser_index);
+        Some(requested.min(self.visible_browser_count() - 1))
     }
 
     fn confirm_regex_search(&mut self) {
@@ -2412,6 +2587,12 @@ impl App {
         self.browsers[browser_index].selected_paths.clear();
     }
 
+    fn active_or_last_browser_index(&self) -> usize {
+        self.focus_browser_index()
+            .unwrap_or(self.last_active_browser_index)
+            .min(self.visible_browser_count().saturating_sub(1))
+    }
+
     fn focus_browser_index(&self) -> Option<usize> {
         if self.editor_only_mode {
             return None;
@@ -2708,6 +2889,16 @@ fn expand_tilde_path(value: &str) -> Result<PathBuf, String> {
     Ok(PathBuf::from(value))
 }
 
+fn complete_open_file_input(input: &str, completion: &str) -> String {
+    match input.rfind(std::path::is_separator) {
+        Some(index) => {
+            let prefix_end = index + input[index..].chars().next().map(char::len_utf8).unwrap_or(1);
+            format!("{}{}", &input[..prefix_end], completion)
+        }
+        None => completion.to_string(),
+    }
+}
+
 fn handle_text_input_key(input: &mut TextInputState, key: KeyEvent) -> Action {
     match key.code {
         KeyCode::Backspace => input.delete_left(),
@@ -2924,6 +3115,8 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
+    use crossterm::event::{KeyCode, KeyEvent};
+
     use super::{Action, App, Dialog, Focus, PendingUnsavedAction};
 
     static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -3076,6 +3269,123 @@ mod tests {
                 None => env::remove_var("HOME"),
             }
         }
+    }
+
+    #[test]
+    fn open_file_dialog_updates_browser_on_existing_directory_prefix() {
+        let test_dir = TestDir::new();
+        let nested = test_dir.path().join("nested");
+        fs::create_dir(&nested).expect("create nested directory");
+
+        let mut app = App::new(test_dir.path().to_path_buf());
+        app.refresh_browser();
+        app.request_open_file_dialog();
+        app.open_file_input.set_text("nested/".to_string());
+
+        app.update_open_file_dialog_browser();
+
+        assert_eq!(app.browsers[0].dir, nested.canonicalize().expect("canonical nested path"));
+    }
+
+    #[test]
+    fn open_file_dialog_reports_missing_directory_prefix() {
+        let test_dir = TestDir::new();
+
+        let mut app = App::new(test_dir.path().to_path_buf());
+        app.refresh_browser();
+        app.request_open_file_dialog();
+        app.open_file_input.set_text("missing/".to_string());
+
+        app.update_open_file_dialog_browser();
+
+        assert!(app.status.contains("Directory not found:"));
+        assert_eq!(
+            app.browsers[0].dir.canonicalize().expect("canonical browser root"),
+            test_dir.path().canonicalize().expect("canonical root path")
+        );
+    }
+
+    #[test]
+    fn open_file_dialog_down_focuses_browser_and_moves_down() {
+        let test_dir = TestDir::new();
+        fs::write(test_dir.path().join("alpha.txt"), "a").expect("write alpha file");
+        fs::write(test_dir.path().join("beta.txt"), "b").expect("write beta file");
+
+        let mut app = App::new(test_dir.path().to_path_buf());
+        app.refresh_browser();
+        app.request_open_file_dialog();
+        let initial = app.browsers[0].selected_entry;
+
+        app.handle_dialog_key(KeyEvent::from(KeyCode::Down));
+
+        assert_eq!(app.dialog, None);
+        assert_eq!(app.focus, Focus::BrowserPrimary);
+        assert_eq!(app.browsers[0].selected_entry, initial + 1);
+    }
+
+    #[test]
+    fn open_file_dialog_typing_selects_first_matching_file_case_insensitively() {
+        let test_dir = TestDir::new();
+        fs::write(test_dir.path().join("Zoo.txt"), "z").expect("write zoo file");
+        fs::write(test_dir.path().join("alpha.txt"), "a").expect("write alpha file");
+
+        let mut app = App::new(test_dir.path().to_path_buf());
+        app.refresh_browser();
+        app.request_open_file_dialog();
+
+        app.handle_dialog_key(KeyEvent::from(KeyCode::Char('z')));
+
+        let selected = &app.browsers[0].entries[app.browsers[0].selected_entry];
+        assert_eq!(selected.label, "Zoo.txt");
+    }
+
+    #[test]
+    fn open_file_dialog_tab_completes_selected_file_name() {
+        let test_dir = TestDir::new();
+        fs::write(test_dir.path().join("Zoo.txt"), "z").expect("write zoo file");
+
+        let mut app = App::new(test_dir.path().to_path_buf());
+        app.refresh_browser();
+        app.request_open_file_dialog();
+        app.handle_dialog_key(KeyEvent::from(KeyCode::Char('z')));
+
+        app.handle_dialog_key(KeyEvent::from(KeyCode::Tab));
+
+        assert_eq!(app.open_file_input.as_str(), "Zoo.txt");
+    }
+
+    #[test]
+    fn open_file_dialog_tab_completes_selected_directory_with_trailing_slash() {
+        let test_dir = TestDir::new();
+        fs::create_dir(test_dir.path().join("nested")).expect("create nested directory");
+
+        let mut app = App::new(test_dir.path().to_path_buf());
+        app.refresh_browser();
+        app.request_open_file_dialog();
+        app.handle_dialog_key(KeyEvent::from(KeyCode::Char('n')));
+
+        app.handle_dialog_key(KeyEvent::from(KeyCode::Tab));
+
+        assert_eq!(app.open_file_input.as_str(), "nested/");
+    }
+
+    #[test]
+    fn open_file_dialog_enter_on_browsed_directory_just_closes_dialog() {
+        let test_dir = TestDir::new();
+        let nested = test_dir.path().join("nested");
+        fs::create_dir(&nested).expect("create nested directory");
+
+        let mut app = App::new(test_dir.path().to_path_buf());
+        app.refresh_browser();
+        app.request_open_file_dialog();
+        app.open_file_input.set_text("nested/".to_string());
+        app.update_open_file_dialog_browser();
+
+        app.handle_dialog_key(KeyEvent::from(KeyCode::Enter));
+
+        assert_eq!(app.dialog, None);
+        assert_eq!(app.focus, Focus::BrowserPrimary);
+        assert_eq!(app.browsers[0].dir, nested.canonicalize().expect("canonical nested path"));
     }
 }
 

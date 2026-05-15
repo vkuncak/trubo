@@ -159,7 +159,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             Dialog::About => draw_dialog(frame, app, dialog, centered(root, 60, 10)),
             Dialog::SaveFile => draw_dialog(frame, app, dialog, centered(root, 72, 10)),
             Dialog::NewDirectory => draw_dialog(frame, app, dialog, centered(root, 76, 12)),
-                Dialog::OpenFilePath => draw_dialog(frame, app, dialog, centered(root, 76, 12)),
+            Dialog::OpenFilePath => draw_dialog(frame, app, dialog, centered(root, 76, 5)),
             Dialog::RegexSearch => {
                 draw_dialog(frame, app, dialog, anchored_search_area(app, root, 48, 5))
             }
@@ -1129,9 +1129,7 @@ fn draw_open_file_dialog(frame: &mut Frame, app: &App, area: Rect) {
     });
 
     let lines = vec![
-        Line::from(""),
         Line::from(vec![Span::styled("Open file", key)]),
-        Line::from(""),
         Line::from(vec![
             Span::styled("Path:", accent),
             Span::styled(" ", base),
@@ -1141,10 +1139,13 @@ fn draw_open_file_dialog(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled("Examples:", accent),
             Span::styled(" src/main.rs  /tmp/log.txt  ~/notes/todo.txt", base),
         ]),
-        Line::from(""),
         Line::from(vec![
             Span::styled("Enter", key),
             Span::styled(" open  ", base),
+            Span::styled("Tab", key),
+            Span::styled(" complete  ", base),
+            Span::styled("Down", key),
+            Span::styled(" browser  ", base),
             Span::styled("Esc", key),
             Span::styled(" cancel", base),
         ]),
@@ -1160,7 +1161,7 @@ fn draw_open_file_dialog(frame: &mut Frame, app: &App, area: Rect) {
 
     let label_width = "Path: ".chars().count();
     let cursor_col = app.open_file_input_cursor().unwrap_or(value.chars().count());
-    let row_offset = 3;
+    let row_offset = 1;
     let cursor_x = content_area
         .x
         .saturating_add(label_width as u16)
