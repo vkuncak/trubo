@@ -72,8 +72,15 @@ pub fn list_directory(dir: &Path) -> Vec<ProjectEntry> {
     directories
 }
 
-pub fn directory_subtree_lines(dir: &Path, max_entries: usize) -> Vec<String> {
-    let mut lines = vec![format!("{}/", file_name(dir))];
+pub fn directory_subtree_lines_with_size(
+    dir: &Path,
+    max_entries: usize,
+    known_size: Option<u64>,
+) -> Vec<String> {
+    let mut lines = vec![match known_size {
+        Some(size) => format!("{}/ ({})", file_name(dir), format_byte_size(size)),
+        None => format!("{}/", file_name(dir)),
+    }];
     let mut remaining = max_entries.saturating_sub(1);
 
     let truncated = append_subtree(dir, "", &mut remaining, &mut lines);
@@ -82,6 +89,46 @@ pub fn directory_subtree_lines(dir: &Path, max_entries: usize) -> Vec<String> {
     }
 
     lines
+}
+
+pub fn subtree_size(path: &Path) -> u64 {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return 0;
+    };
+
+    if metadata.is_file() {
+        return metadata.len();
+    }
+
+    if !metadata.is_dir() {
+        return 0;
+    }
+
+    let Ok(entries) = fs::read_dir(path) else {
+        return 0;
+    };
+
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| subtree_size(&entry.path()))
+        .sum()
+}
+
+pub fn format_byte_size(size: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+
+    let mut value = size as f64;
+    let mut unit_index = 0usize;
+    while value >= 1024.0 && unit_index + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit_index += 1;
+    }
+
+    if unit_index == 0 {
+        format!("{size} {}", UNITS[unit_index])
+    } else {
+        format!("{value:.1} {}", UNITS[unit_index])
+    }
 }
 
 fn append_subtree(

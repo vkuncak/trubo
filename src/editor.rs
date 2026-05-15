@@ -49,6 +49,9 @@ pub struct Editor {
     path: Option<PathBuf>,
     lines: Vec<String>,
     binary_size: Option<u64>,
+    read_only: bool,
+    fully_loaded: bool,
+    deferred_load_path: Option<PathBuf>,
     cursor_row: usize,
     cursor_col: usize,
     preferred_visual_col: Option<usize>,
@@ -69,6 +72,9 @@ impl Editor {
             path: None,
             lines: vec![String::new()],
             binary_size: None,
+            read_only: false,
+            fully_loaded: true,
+            deferred_load_path: None,
             cursor_row: 0,
             cursor_col: 0,
             preferred_visual_col: None,
@@ -89,6 +95,9 @@ impl Editor {
             path: None,
             lines: if lines.is_empty() { vec![String::new()] } else { lines },
             binary_size: None,
+            read_only: false,
+            fully_loaded: true,
+            deferred_load_path: None,
             cursor_row: 0,
             cursor_col: 0,
             preferred_visual_col: None,
@@ -111,6 +120,34 @@ impl Editor {
             path: Some(path.to_path_buf()),
             lines,
             binary_size,
+            read_only: binary_size.is_some(),
+            fully_loaded: true,
+            deferred_load_path: None,
+            cursor_row: 0,
+            cursor_col: 0,
+            preferred_visual_col: None,
+            row_offset: 0,
+            row_segment_offset: 0,
+            col_offset: 0,
+            viewport_rows: 18,
+            viewport_cols: 72,
+            selection_anchor: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            dirty: false,
+        })
+    }
+
+    pub fn preview(path: &Path, max_bytes: usize) -> io::Result<Self> {
+        let (lines, binary_size, fully_loaded) = read_preview_buffer_from_path(path, max_bytes)?;
+
+        Ok(Self {
+            path: Some(path.to_path_buf()),
+            lines,
+            binary_size,
+            read_only: binary_size.is_some(),
+            fully_loaded,
+            deferred_load_path: (!fully_loaded).then(|| path.to_path_buf()),
             cursor_row: 0,
             cursor_col: 0,
             preferred_visual_col: None,
@@ -130,6 +167,10 @@ impl Editor {
         let Some(path) = &self.path else {
             return Err(io::Error::other("scratch buffer has no path"));
         };
+
+        if self.read_only {
+            return Err(io::Error::other("buffer is read-only"));
+        }
 
         if !self.dirty {
             return Ok(SaveOutcome::Unchanged);
@@ -153,9 +194,16 @@ impl Editor {
     }
 
     pub fn header_metric_label(&self) -> String {
-        match self.binary_size {
+        let metric = match self.binary_size {
             Some(size) => format!("{size} bytes"),
             None => format!("{} LOC", self.lines.len()),
+        };
+
+        match (self.read_only, self.fully_loaded) {
+            (true, true) => format!("{metric}, RO"),
+            (true, false) => format!("{metric}, RO, preview"),
+            (false, false) => format!("{metric}, preview"),
+            (false, true) => metric,
         }
     }
 
@@ -177,6 +225,46 @@ impl Editor {
 
     pub fn is_dirty(&self) -> bool {
         self.dirty
+    }
+
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
+    #[cfg(test)]
+    pub fn is_fully_loaded(&self) -> bool {
+        self.fully_loaded
+    }
+
+    pub fn ensure_fully_loaded(&mut self) -> io::Result<bool> {
+        let Some(path) = self.deferred_load_path.clone() else {
+            return Ok(false);
+        };
+
+        let cursor = self.current_position();
+        let selection_anchor = self.selection_anchor;
+        let row_offset = self.row_offset;
+        let row_segment_offset = self.row_segment_offset;
+        let col_offset = self.col_offset;
+
+        let (lines, binary_size) = read_buffer_from_path(&path)?;
+        self.lines = lines;
+        self.binary_size = binary_size;
+        self.read_only = binary_size.is_some();
+        self.fully_loaded = true;
+        self.deferred_load_path = None;
+
+        self.set_cursor_position(self.clamp_position(cursor));
+        self.preferred_visual_col = None;
+        self.selection_anchor = selection_anchor.map(|anchor| self.clamp_position(anchor));
+        if self.selection_anchor == Some(self.current_position()) {
+            self.clear_selection();
+        }
+        self.row_offset = row_offset;
+        self.row_segment_offset = row_segment_offset;
+        self.col_offset = col_offset;
+        self.keep_cursor_visible();
+        Ok(true)
     }
 
     pub fn set_cursor(&mut self, row: usize, col: usize) {
@@ -351,6 +439,9 @@ impl Editor {
     }
 
     pub fn insert_char(&mut self, character: char) {
+        if self.read_only {
+            return;
+        }
         self.capture_undo_state();
         self.delete_selection();
         let cursor_col = self.cursor_col;
@@ -363,6 +454,9 @@ impl Editor {
     }
 
     pub fn insert_text(&mut self, text: &str) {
+        if self.read_only {
+            return;
+        }
         let text = normalize_newlines(text);
         if text.is_empty() {
             return;
@@ -399,6 +493,9 @@ impl Editor {
     }
 
     pub fn insert_newline(&mut self) {
+        if self.read_only {
+            return;
+        }
         self.capture_undo_state();
         self.delete_selection();
         let cursor_col = self.cursor_col;
@@ -413,6 +510,9 @@ impl Editor {
     }
 
     pub fn backspace(&mut self) {
+        if self.read_only {
+            return;
+        }
         if !self.has_selection() && self.cursor_col == 0 && self.cursor_row == 0 {
             self.keep_cursor_visible();
             return;
@@ -440,6 +540,9 @@ impl Editor {
     }
 
     pub fn delete(&mut self) {
+        if self.read_only {
+            return;
+        }
         if !self.has_selection()
             && self.cursor_col >= self.line_len(self.cursor_row)
             && self.cursor_row + 1 >= self.lines.len()
@@ -467,6 +570,9 @@ impl Editor {
     }
 
     pub fn delete_line(&mut self) {
+        if self.read_only {
+            return;
+        }
         self.capture_undo_state();
         self.clear_selection();
         if self.lines.len() == 1 {
@@ -748,6 +854,9 @@ impl Editor {
         let (lines, binary_size) = read_buffer_from_path(&path)?;
         self.lines = lines;
         self.binary_size = binary_size;
+        self.read_only = binary_size.is_some();
+        self.fully_loaded = true;
+        self.deferred_load_path = None;
         self.dirty = false;
 
         self.set_cursor_position(self.clamp_position(cursor));
@@ -848,12 +957,32 @@ fn wrapped_rows(line_len: usize, cols: usize) -> usize {
 fn read_buffer_from_path(path: &Path) -> io::Result<(Vec<String>, Option<u64>)> {
     let bytes = fs::read(path)?;
     let binary_size = is_binary_bytes(&bytes).then_some(bytes.len() as u64);
+    Ok(decode_buffer_bytes(&bytes, binary_size, true))
+}
+
+fn read_preview_buffer_from_path(
+    path: &Path,
+    max_bytes: usize,
+) -> io::Result<(Vec<String>, Option<u64>, bool)> {
+    let bytes = fs::read(path)?;
+    let binary_size = is_binary_bytes(&bytes).then_some(bytes.len() as u64);
+    let fully_loaded = bytes.len() <= max_bytes.max(1);
+    let slice_end = bytes.len().min(max_bytes.max(1));
+    let (lines, _) = decode_buffer_bytes(&bytes[..slice_end], binary_size, fully_loaded);
+    Ok((lines, binary_size, fully_loaded))
+}
+
+fn decode_buffer_bytes(
+    bytes: &[u8],
+    binary_size: Option<u64>,
+    fully_loaded: bool,
+) -> (Vec<String>, Option<u64>) {
     let content = String::from_utf8_lossy(&bytes).into_owned();
     let mut lines: Vec<String> = content.lines().map(ToString::to_string).collect();
-    if content.ends_with('\n') || lines.is_empty() {
+    if content.ends_with('\n') || lines.is_empty() || !fully_loaded {
         lines.push(String::new());
     }
-    Ok((lines, binary_size))
+    (lines, binary_size)
 }
 
 fn backup_path(path: &Path) -> io::Result<PathBuf> {
@@ -1290,5 +1419,36 @@ mod tests {
     #[test]
     fn detects_nul_bytes_as_binary() {
         assert!(is_binary_bytes(&[0x66, 0x6f, 0x00, 0x6f]));
+    }
+
+    #[test]
+    fn binary_files_open_read_only() {
+        let test_dir = TestDir::new();
+        let path = test_dir.path().join("blob.bin");
+        fs::write(&path, [0x66, 0x00, 0x6f]).expect("write binary test file");
+
+        let editor = Editor::open(&path).expect("open binary file");
+
+        assert!(editor.is_read_only());
+    }
+
+    #[test]
+    fn preview_can_be_promoted_to_full_buffer() {
+        let test_dir = TestDir::new();
+        let path = test_dir.path().join("large.txt");
+        fs::write(&path, "alpha\nbeta\ngamma\ndelta\n").expect("write preview test file");
+
+        let mut editor = Editor::preview(&path, 5).expect("open preview buffer");
+
+        assert!(!editor.is_fully_loaded());
+        assert!(editor.ensure_fully_loaded().expect("load full buffer"));
+        assert!(editor.is_fully_loaded());
+        assert_eq!(editor.lines(), &[
+            "alpha".to_string(),
+            "beta".to_string(),
+            "gamma".to_string(),
+            "delta".to_string(),
+            "".to_string(),
+        ]);
     }
 }

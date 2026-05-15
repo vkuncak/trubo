@@ -95,18 +95,23 @@ const CURRENT_THEME: Theme = Theme {
 const SECONDARY_BROWSER_GUTTER_WIDTH: u16 = 1;
 const FILE_OPERATION_DIALOG_WIDTH: u16 = 72;
 const FILE_CONFLICT_DIALOG_WIDTH: u16 = 76;
+const DEFAULT_HEADER_PATH_WIDTH: usize = 40;
 const SECONDARY_BROWSER_HEADER_BINDINGS: [(&str, &str); 4] = [
     ("F5", " Copy  "),
     ("F6", " Move  "),
     ("F7", " MkDir  "),
     ("F8", " Delete "),
 ];
-const PRIMARY_HEADER_BINDINGS: [(&str, &str); 7] = [
+const PRIMARY_HEADER_BINDINGS: [(&str, &str); 4] = [
+    ("F1", " Help  "),
+    ("Ctrl-B", " Side  "),
+    ("F10", " Menu  "),
+    ("Ctrl-Q", " Quit"),
+];
+const PRIMARY_HEADER_BINDINGS_WITH_DUAL: [(&str, &str); 5] = [
     ("F1", " Help  "),
     ("Ctrl-B", " Side  "),
     ("`", " Dual "),
-    ("F4", " Pane  "),
-    ("Ctrl-T", " Mark  "),
     ("F10", " Menu  "),
     ("Ctrl-Q", " Quit"),
 ];
@@ -217,7 +222,7 @@ fn draw_file_header(frame: &mut Frame, area: Rect, app: &App) {
         .bg(CURRENT_THEME.status_bar_bg)
         .add_modifier(Modifier::BOLD);
 
-    let mut right = Line::from(build_header_right_spans(base, key, &cursor_label));
+    let mut right = Line::from(build_header_right_spans(app, base, key, &cursor_label));
     let right_width = right.width();
     let total_width = area.width as usize;
 
@@ -245,11 +250,14 @@ fn build_header_left_spans(app: &App, width: u16, base: Style, key: Style) -> Ve
     }
 
     let dirty = if app.editor.is_dirty() { " *" } else { "" };
+    let read_only = if app.editor.is_read_only() { " [RO]" } else { "" };
+    let file_label = compress_middle(&app.current_file_label(), DEFAULT_HEADER_PATH_WIDTH);
     let label = format!(
-        " {} ({}){} ",
-        app.current_file_label(),
+        " {} ({}){}{} ",
+        file_label,
         app.editor.header_metric_label(),
         dirty,
+        read_only,
     );
     fit_header_segments(
         vec![(label, false)],
@@ -259,8 +267,13 @@ fn build_header_left_spans(app: &App, width: u16, base: Style, key: Style) -> Ve
     )
 }
 
-fn build_header_right_spans(base: Style, key: Style, cursor_label: &str) -> Vec<Span<'static>> {
-    let mut spans = build_binding_spans(&PRIMARY_HEADER_BINDINGS, base, key);
+fn build_header_right_spans(app: &App, base: Style, key: Style, cursor_label: &str) -> Vec<Span<'static>> {
+    let bindings: &[(&str, &str)] = if app.editor_only_mode {
+        &PRIMARY_HEADER_BINDINGS
+    } else {
+        &PRIMARY_HEADER_BINDINGS_WITH_DUAL
+    };
+    let mut spans = build_binding_spans(bindings, base, key);
     spans.push(Span::styled(cursor_label.to_string(), base));
     spans
 }
@@ -696,14 +709,27 @@ fn draw_browser_log(frame: &mut Frame, area: Rect, app: &App) {
         sections[1],
     );
 
-    let log_lines = vec![
-        Line::from(Span::styled(
+    let mut log_lines = app
+        .log_lines(sections[1].height as usize)
+        .into_iter()
+        .map(|line| {
+            Line::from(Span::styled(
+                line,
+                Style::default()
+                    .fg(CURRENT_THEME.panel_text_primary)
+                    .bg(CURRENT_THEME.panel_background),
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    if log_lines.is_empty() {
+        log_lines.push(Line::from(Span::styled(
             format!("Status: {}", app.status),
             Style::default()
                 .fg(CURRENT_THEME.panel_text_primary)
                 .bg(CURRENT_THEME.panel_background),
-        )),
-    ];
+        )));
+    }
 
     frame.render_widget(
         Paragraph::new(Text::from(log_lines))
@@ -930,7 +956,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         help_bindings_line(&[("Ctrl+L", "Redraw screen"), ("Ctrl+R", "Run current file"), ("Ctrl+B", "Editor only")]),
         help_bindings_line(&[("`", "Toggle dual pane")]),
         help_bindings_line(&[("Ctrl+T/Ins", "Mark/unmark entry")]),
-        help_bindings_line(&[("Ctrl+Space", "Toggle select mode")]),
+        help_bindings_line(&[("Ctrl+Space", "Compute selected size")]),
         help_bindings_line(&[("Ctrl+C", "Copy"), ("Ctrl+X", "Cut"), ("Ctrl+V", "Paste"), ("Ctrl+Z", "Undo")]),
         help_bindings_line(&[("Ctrl+Y", "Redo")]),
         help_bindings_line(&[("Ctrl+Ins", "Copy"), ("Shift+Ins", "Paste"), ("Shift+Del", "Cut")]),
@@ -1709,6 +1735,23 @@ fn truncate(value: &str, width: u16) -> String {
         result.push('>');
     }
     result
+}
+
+fn compress_middle(value: &str, max_chars: usize) -> String {
+    let chars = value.chars().collect::<Vec<_>>();
+    if chars.len() <= max_chars || max_chars <= 3 {
+        return value.to_string();
+    }
+
+    let reserved = max_chars - 3;
+    let prefix_len = reserved / 2;
+    let suffix_len = reserved - prefix_len;
+
+    let prefix = chars.iter().take(prefix_len).collect::<String>();
+    let suffix = chars[chars.len().saturating_sub(suffix_len)..]
+        .iter()
+        .collect::<String>();
+    format!("{prefix}...{suffix}")
 }
 
 fn render_editor_segment(

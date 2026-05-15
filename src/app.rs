@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashMap, VecDeque},
     env, fs, io,
     path::{Path, PathBuf},
     process::Command,
@@ -16,7 +16,10 @@ use ratatui::layout::Rect;
 use crate::{
     editor::{Editor, SaveOutcome},
     file_types::{ToolInvocation, detect_file_type},
-    project::{ProjectEntry, ProjectEntryKind, directory_subtree_lines, list_directory},
+    project::{
+        ProjectEntry, ProjectEntryKind, directory_subtree_lines_with_size, format_byte_size,
+        list_directory, subtree_size,
+    },
 };
 
 pub const MENUS: [Menu; 6] = [
@@ -314,6 +317,7 @@ const BROWSER_PANE_COUNT: usize = 2;
 const BROWSER_PREVIEW_DELAY: Duration = Duration::from_millis(200);
 const DIRECTORY_PREVIEW_MAX_ENTRIES: usize = 256;
 const DEFAULT_BROWSER_SELECTION_PATTERN: &str = r".*\..*";
+const LOG_HISTORY_LIMIT: usize = 64;
 
 #[derive(Debug, Clone)]
 pub struct BrowserPane {
@@ -359,6 +363,8 @@ pub struct App {
     pub browser_pane_width: u16,
     pub geometry: Geometry,
     preview_label: Option<String>,
+    log_messages: VecDeque<String>,
+    computed_sizes: HashMap<PathBuf, u64>,
     pending_unsaved_action: Option<PendingUnsavedAction>,
     pending_new_directory_browser: Option<usize>,
     new_directory_input: TextInputState,
@@ -411,6 +417,8 @@ impl App {
             browser_pane_width: 30,
             geometry: Geometry::default(),
             preview_label: None,
+            log_messages: VecDeque::new(),
+            computed_sizes: HashMap::new(),
             pending_unsaved_action: None,
             pending_new_directory_browser: None,
             new_directory_input: TextInputState::default(),
@@ -478,6 +486,7 @@ impl App {
 
     fn apply_focus_change(&mut self, focus: Focus) {
         self.assign_focus(focus);
+        self.load_editor_if_preview_incomplete();
         if self.focus_browser_index().is_some() {
             self.schedule_browser_preview();
         }
@@ -551,8 +560,11 @@ impl App {
 
         self.browser_preview_due_at = None;
 
-        let browser = &self.browsers[browser_index];
-        let Some(entry) = browser.entries.get(browser.selected_entry) else {
+        let Some(entry) = self.browsers[browser_index]
+            .entries
+            .get(self.browsers[browser_index].selected_entry)
+            .cloned()
+        else {
             return;
         };
 
@@ -567,9 +579,11 @@ impl App {
                 return;
             }
 
-            self.editor = Editor::from_lines(directory_subtree_lines(
+            self.log_message(format!("Previewing directory tree for {}", entry.path.display()));
+            self.editor = Editor::from_lines(directory_subtree_lines_with_size(
                 &entry.path,
                 DIRECTORY_PREVIEW_MAX_ENTRIES,
+                self.computed_sizes.get(&entry.path).copied(),
             ));
             self.preview_label = Some(preview_label);
             self.status = format!("Previewed tree for {}", entry.path.display());
@@ -581,7 +595,8 @@ impl App {
         }
 
         let path = entry.path.clone();
-        match Editor::open(&path) {
+        self.log_message(format!("Previewing {}", path.display()));
+        match Editor::preview(&path, self.preview_byte_limit()) {
             Ok(editor) => {
                 self.editor = editor;
                 self.preview_label = None;
@@ -610,6 +625,18 @@ impl App {
             .path()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "Untitled".to_string())
+    }
+
+    pub fn log_lines(&self, max_lines: usize) -> Vec<String> {
+        self.log_messages
+            .iter()
+            .rev()
+            .take(max_lines)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect()
     }
 
     pub fn save_file_dialog_title(&self) -> &'static str {
@@ -650,7 +677,7 @@ impl App {
 
     pub fn pending_file_operation_title(&self) -> Option<&'static str> {
         let operation = self.pending_file_operation.as_ref()?;
-        Some(operation.kind.confirm_title(operation.source_parent(), operation.target_dir.as_deref(), operation.sources.len()))
+        Some(operation.confirm_title())
     }
 
     pub fn pending_file_operation_paths(&self) -> Option<(String, Option<String>)> {
@@ -814,6 +841,7 @@ impl App {
         let created = if path.exists() {
             false
         } else {
+            self.log_message(format!("Creating {}", path.display()));
             match fs::write(&path, "") {
                 Ok(()) => true,
                 Err(error) => {
@@ -837,6 +865,7 @@ impl App {
             }
         }
 
+        self.log_message(format!("Opening {}", path.display()));
         match Editor::open(&path) {
             Ok(editor) => {
                 self.editor = editor;
@@ -854,6 +883,7 @@ impl App {
 
     fn navigate_to_dir(&mut self, browser_index: usize, path: PathBuf, selected_path: Option<&Path>) {
         let path = path.canonicalize().unwrap_or(path);
+        self.log_message(format!("Reading directory {}", path.display()));
         let browser = &mut self.browsers[browser_index];
         browser.dir = path;
         browser.selected_entry = 0;
@@ -868,6 +898,9 @@ impl App {
 
     pub fn save_current(&mut self) -> bool {
         self.close_menu();
+        if let Some(path) = self.editor.path() {
+            self.log_message(format!("Saving {}", path.display()));
+        }
         match self.editor.save() {
             Ok(SaveOutcome::Saved) => {
                 self.refresh_buffers_after_save();
@@ -882,13 +915,27 @@ impl App {
         }
     }
 
-    pub fn toggle_selection_mode(&mut self) {
-        self.selection_mode = !self.selection_mode;
-        self.status = if self.selection_mode {
-            "Selection mode ON".to_string()
-        } else {
-            "Selection mode OFF".to_string()
+    pub fn compute_selected_entry_size(&mut self) {
+        self.close_menu();
+
+        let Some(path) = self.selected_browser_path().or_else(|| self.editor.path().map(Path::to_path_buf)) else {
+            self.status = "No file selected".to_string();
+            return;
         };
+
+        self.log_message(format!("Computing size for {}", path.display()));
+        let size = subtree_size(&path);
+        self.computed_sizes.insert(path.clone(), size);
+
+        if self.preview_label.is_some() && path.is_dir() {
+            self.editor = Editor::from_lines(directory_subtree_lines_with_size(
+                &path,
+                DIRECTORY_PREVIEW_MAX_ENTRIES,
+                Some(size),
+            ));
+        }
+
+        self.status = format!("Size: {} ({})", path.display(), format_byte_size(size));
     }
 
     pub fn run_current_target(&mut self) {
@@ -1691,6 +1738,8 @@ impl App {
         }
 
         let single_source = sources.len() == 1;
+        let deleting_directory = kind == FileOperationKind::Delete
+            && sources.iter().any(|path| path.is_dir());
 
         self.pending_file_operation = Some(PendingFileOperation {
             kind,
@@ -1721,7 +1770,11 @@ impl App {
         }
 
         self.dialog = Some(Dialog::ConfirmFileOperation);
-        self.status = format!("Confirm {}", kind.label());
+        self.status = if deleting_directory {
+            "Confirm directory delete".to_string()
+        } else {
+            format!("Confirm {}", kind.label())
+        };
     }
 
     fn confirm_new_directory(&mut self) {
@@ -1746,6 +1799,7 @@ impl App {
             return;
         }
 
+        self.log_message(format!("Creating directory {}", target.display()));
         match fs::create_dir(&target) {
             Ok(()) => {
                 self.clear_new_directory_request();
@@ -2271,6 +2325,10 @@ impl App {
     fn run_pending_file_operation(&mut self) {
         self.dialog = None;
 
+        if let Some(operation) = self.pending_file_operation.as_ref() {
+            self.log_message(operation.start_message());
+        }
+
         loop {
             let Some(operation) = self.pending_file_operation.as_mut() else {
                 return;
@@ -2372,6 +2430,23 @@ impl App {
     }
 
     fn handle_editor_key(&mut self, key: KeyEvent) {
+        if self.editor.is_read_only() {
+            let is_navigation = matches!(
+                key.code,
+                KeyCode::Left
+                    | KeyCode::Right
+                    | KeyCode::Up
+                    | KeyCode::Down
+                    | KeyCode::Home
+                    | KeyCode::End
+                    | KeyCode::PageUp
+                    | KeyCode::PageDown
+            );
+            if !is_navigation {
+                self.status = "Buffer is read-only".to_string();
+                return;
+            }
+        }
         let selecting = key.modifiers.contains(KeyModifiers::SHIFT) || self.selection_mode;
         match key.code {
             KeyCode::Left if selecting => self.editor.extend_left(),
@@ -2479,6 +2554,52 @@ impl App {
 
     fn schedule_browser_preview(&mut self) {
         self.browser_preview_due_at = Some(Instant::now() + BROWSER_PREVIEW_DELAY);
+    }
+
+    fn preview_byte_limit(&self) -> usize {
+        let rows = self.geometry.editor_inner.height.max(1) as usize;
+        let cols = self.geometry.editor_inner.width.max(1) as usize;
+        rows.saturating_mul(cols).max(256)
+    }
+
+    fn load_editor_if_preview_incomplete(&mut self) {
+        if self.focus != Focus::Editor {
+            return;
+        }
+
+        if self.preview_label.is_some() {
+            return;
+        }
+
+        let path = self.editor.path().map(Path::to_path_buf);
+        match self.editor.ensure_fully_loaded() {
+            Ok(true) => {
+                if let Some(path) = path {
+                    self.log_message(format!("Loading full contents of {}", path.display()));
+                    self.status = format!("Loaded full contents of {}", path.display());
+                }
+            }
+            Ok(false) => {}
+            Err(error) => {
+                self.status = format!("Open failed: {error}");
+            }
+        }
+    }
+
+    fn selected_browser_path(&self) -> Option<PathBuf> {
+        let browser_index = self.focus_browser_index()?;
+        self.browsers[browser_index]
+            .entries
+            .get(self.browsers[browser_index].selected_entry)
+            .filter(|entry| entry.kind != ProjectEntryKind::Parent)
+            .map(|entry| entry.path.clone())
+    }
+
+    fn log_message(&mut self, message: String) {
+        self.log_messages.push_back(message);
+        while self.log_messages.len() > LOG_HISTORY_LIMIT {
+            self.log_messages.pop_front();
+        }
     }
 
     fn select_entry_at(&mut self, browser_index: usize, row: u16) {
@@ -2693,19 +2814,6 @@ impl FileOperationKind {
         }
     }
 
-    fn confirm_title(self, source_parent: Option<&Path>, target_parent: Option<&Path>, count: usize) -> &'static str {
-        let plural = count > 1;
-        match self {
-            FileOperationKind::Copy if plural => "Copy selected files?",
-            FileOperationKind::Copy => "Copy selected file?",
-            FileOperationKind::Move if !plural && source_parent == target_parent => "Rename selected file?",
-            FileOperationKind::Move if plural => "Move selected files?",
-            FileOperationKind::Move => "Move selected file?",
-            FileOperationKind::Delete if plural => "Delete selected files?",
-            FileOperationKind::Delete => "Delete selected file?",
-        }
-    }
-
     fn name_prompt_title(self) -> &'static str {
         match self {
             FileOperationKind::Copy => "Copy selected file as",
@@ -2716,6 +2824,24 @@ impl FileOperationKind {
 }
 
 impl PendingFileOperation {
+    fn confirm_title(&self) -> &'static str {
+        let plural = self.sources.len() > 1;
+        let contains_directory = self.sources.iter().any(|path| path.is_dir());
+        match self.kind {
+            FileOperationKind::Copy if plural => "Copy selected files?",
+            FileOperationKind::Copy => "Copy selected file?",
+            FileOperationKind::Move if !plural && self.source_parent() == self.target_dir.as_deref() => {
+                "Rename selected file?"
+            }
+            FileOperationKind::Move if plural => "Move selected files?",
+            FileOperationKind::Move => "Move selected file?",
+            FileOperationKind::Delete if plural && contains_directory => "Delete selected directories/files?",
+            FileOperationKind::Delete if contains_directory => "Delete selected directory?",
+            FileOperationKind::Delete if plural => "Delete selected files?",
+            FileOperationKind::Delete => "Delete selected file?",
+        }
+    }
+
     fn single_source(&self) -> Option<&Path> {
         match self.sources.as_slice() {
             [source] => Some(source.as_path()),
@@ -2818,6 +2944,14 @@ impl PendingFileOperation {
                 }
                 message
             }
+        }
+    }
+
+    fn start_message(&self) -> String {
+        match self.kind {
+            FileOperationKind::Copy => format!("Starting copy of {} item(s)", self.sources.len()),
+            FileOperationKind::Move => format!("Starting move of {} item(s)", self.sources.len()),
+            FileOperationKind::Delete => format!("Starting delete of {} item(s)", self.sources.len()),
         }
     }
 }

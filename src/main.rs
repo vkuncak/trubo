@@ -179,7 +179,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
     }
 
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char(' ') {
-        app.toggle_selection_mode();
+        app.compute_selected_entry_size();
         return Action::None;
     }
 
