@@ -4009,7 +4009,7 @@ mod tests {
 
         assert_eq!(
             counterexample,
-            "Counterexample:\nx: Int -> 2147418111\ny: Int -> 1073807364"
+            "Counterexample:\n x: Int -> 2147418111\n y: Int -> 1073807364"
         );
     }
 
@@ -4029,7 +4029,7 @@ warning:   x: Int -> 2147418111\n\
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(
             diagnostics[0].message,
-            "Counterexample:\nx: Int -> 2147418111\ny: Int -> 1073807364"
+            "Counterexample:\n x: Int -> 2147418111\n y: Int -> 1073807364"
         );
     }
 
@@ -4060,7 +4060,7 @@ Optionally.scala:6:10:                  f   postcondition           invalid     
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(
             diagnostics[0].message,
-            "Counterexample:\nx: Int -> 2147418111\ny: Int -> 1073807364"
+            "Counterexample:\n x: Int -> 2147418111\n y: Int -> 1073807364"
         );
     }
 
