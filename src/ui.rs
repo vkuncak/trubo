@@ -826,6 +826,28 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
                 lines.push(Line::from(spans));
             }
 
+            for diagnostic in app.editor.diagnostics_for_row(file_row) {
+                if lines.len() >= text_rows {
+                    break;
+                }
+
+                let mut spans = Vec::new();
+                spans.push(Span::styled(
+                    " ".repeat(line_number_width as usize),
+                    Style::default()
+                        .fg(CURRENT_THEME.editor_line_number_fg)
+                        .bg(CURRENT_THEME.editor_text_bg),
+                ));
+                spans.push(Span::styled(
+                    format!("! {}", diagnostic.message),
+                    Style::default()
+                        .fg(CURRENT_THEME.status_hotkey_fg)
+                        .bg(CURRENT_THEME.editor_text_bg)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                lines.push(Line::from(spans));
+            }
+
             segment_offset = 0;
             file_row += 1;
         } else {
@@ -885,15 +907,19 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
                 .get(row_offset)
                 .map(|line| wrapped_rows(line.chars().count(), text_cols))
                 .unwrap_or(1);
-            visual_from_top += first_wrapped.saturating_sub(app.editor.row_segment_offset());
-            visual_from_top += app
-                .editor
-                .lines()
-                .iter()
-                .enumerate()
-                .skip(row_offset + 1)
-                .take(app.editor.cursor_row().saturating_sub(row_offset + 1))
-                .map(|(_, line)| wrapped_rows(line.chars().count(), text_cols))
+            visual_from_top += first_wrapped
+                .saturating_sub(app.editor.row_segment_offset())
+                + app.editor.diagnostics_for_row(row_offset).len();
+            visual_from_top += (row_offset + 1..app.editor.cursor_row())
+                .map(|row| {
+                    let wrapped = app
+                        .editor
+                        .lines()
+                        .get(row)
+                        .map(|line| wrapped_rows(line.chars().count(), text_cols))
+                        .unwrap_or(1);
+                    wrapped + app.editor.diagnostics_for_row(row).len()
+                })
                 .sum::<usize>();
             visual_from_top += cursor_segment;
         }

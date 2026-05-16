@@ -10,6 +10,13 @@ pub struct Position {
     pub col: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiagnosticMessage {
+    pub row: usize,
+    pub col: usize,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Copy)]
 enum Movement {
     Left,
@@ -27,6 +34,7 @@ enum Movement {
 #[derive(Debug, Clone)]
 struct UndoState {
     lines: Vec<String>,
+    diagnostics: Vec<DiagnosticMessage>,
     cursor_row: usize,
     cursor_col: usize,
     row_offset: usize,
@@ -48,6 +56,7 @@ pub enum SaveOutcome {
 pub struct Editor {
     path: Option<PathBuf>,
     lines: Vec<String>,
+    diagnostics: Vec<DiagnosticMessage>,
     binary_size: Option<u64>,
     read_only: bool,
     fully_loaded: bool,
@@ -71,6 +80,7 @@ impl Editor {
         Self {
             path: None,
             lines: vec![String::new()],
+            diagnostics: Vec::new(),
             binary_size: None,
             read_only: false,
             fully_loaded: true,
@@ -94,6 +104,7 @@ impl Editor {
         Self {
             path: None,
             lines: if lines.is_empty() { vec![String::new()] } else { lines },
+            diagnostics: Vec::new(),
             binary_size: None,
             read_only: false,
             fully_loaded: true,
@@ -119,6 +130,7 @@ impl Editor {
         Ok(Self {
             path: Some(path.to_path_buf()),
             lines,
+            diagnostics: Vec::new(),
             binary_size,
             read_only: binary_size.is_some(),
             fully_loaded: true,
@@ -144,6 +156,7 @@ impl Editor {
         Ok(Self {
             path: Some(path.to_path_buf()),
             lines,
+            diagnostics: Vec::new(),
             binary_size,
             read_only: binary_size.is_some(),
             fully_loaded,
@@ -191,6 +204,31 @@ impl Editor {
 
     pub fn lines(&self) -> &[String] {
         &self.lines
+    }
+
+    pub fn diagnostics_for_row(&self, row: usize) -> &[DiagnosticMessage] {
+        let start = self.diagnostics.partition_point(|diagnostic| diagnostic.row < row);
+        let end = self.diagnostics.partition_point(|diagnostic| diagnostic.row <= row);
+        &self.diagnostics[start..end]
+    }
+
+    pub fn set_diagnostics(&mut self, mut diagnostics: Vec<DiagnosticMessage>) {
+        diagnostics.sort_by(|left, right| {
+            left.row
+                .cmp(&right.row)
+                .then(left.col.cmp(&right.col))
+                .then(left.message.cmp(&right.message))
+        });
+        self.diagnostics = diagnostics;
+        self.keep_cursor_visible();
+    }
+
+    pub fn clear_diagnostics(&mut self) {
+        if self.diagnostics.is_empty() {
+            return;
+        }
+        self.diagnostics.clear();
+        self.keep_cursor_visible();
     }
 
     pub fn header_metric_label(&self) -> String {
@@ -445,6 +483,7 @@ impl Editor {
         self.capture_undo_state();
         self.delete_selection();
         let cursor_col = self.cursor_col;
+        self.shift_diagnostics_for_insert(self.cursor_row, cursor_col, 1, 0, 0);
         let byte_idx = char_to_byte(&self.lines[self.cursor_row], cursor_col);
         self.lines[self.cursor_row].insert(byte_idx, character);
         self.cursor_col += 1;
@@ -465,6 +504,20 @@ impl Editor {
         self.capture_undo_state();
         self.delete_selection();
         let parts = text.split('\n').collect::<Vec<_>>();
+        let inserted_lines = parts.len().saturating_sub(1);
+        let last_line_len = parts.last().map(|part| part.chars().count()).unwrap_or(0);
+        let inserted_cols = if inserted_lines == 0 {
+            parts.first().map(|part| part.chars().count()).unwrap_or(0)
+        } else {
+            0
+        };
+        self.shift_diagnostics_for_insert(
+            self.cursor_row,
+            self.cursor_col,
+            inserted_cols,
+            inserted_lines,
+            last_line_len,
+        );
         if parts.len() == 1 {
             let byte_idx = char_to_byte(&self.lines[self.cursor_row], self.cursor_col);
             self.lines[self.cursor_row].insert_str(byte_idx, parts[0]);
@@ -499,6 +552,7 @@ impl Editor {
         self.capture_undo_state();
         self.delete_selection();
         let cursor_col = self.cursor_col;
+        self.shift_diagnostics_for_insert(self.cursor_row, cursor_col, 0, 1, 0);
         let byte_idx = char_to_byte(&self.lines[self.cursor_row], cursor_col);
         let remainder = self.lines[self.cursor_row].split_off(byte_idx);
         self.cursor_row += 1;
@@ -524,11 +578,32 @@ impl Editor {
         }
 
         if self.cursor_col > 0 {
+            self.shift_diagnostics_for_delete(
+                Position {
+                    row: self.cursor_row,
+                    col: self.cursor_col - 1,
+                },
+                Position {
+                    row: self.cursor_row,
+                    col: self.cursor_col,
+                },
+            );
             let remove_at = char_to_byte(&self.lines[self.cursor_row], self.cursor_col - 1);
             self.lines[self.cursor_row].remove(remove_at);
             self.cursor_col -= 1;
             self.dirty = true;
         } else if self.cursor_row > 0 {
+            let previous_len = self.line_len(self.cursor_row - 1);
+            self.shift_diagnostics_for_delete(
+                Position {
+                    row: self.cursor_row - 1,
+                    col: previous_len,
+                },
+                Position {
+                    row: self.cursor_row,
+                    col: 0,
+                },
+            );
             let current = self.lines.remove(self.cursor_row);
             self.cursor_row -= 1;
             self.cursor_col = self.line_len(self.cursor_row);
@@ -557,10 +632,30 @@ impl Editor {
         }
 
         if self.cursor_col < self.line_len(self.cursor_row) {
+            self.shift_diagnostics_for_delete(
+                Position {
+                    row: self.cursor_row,
+                    col: self.cursor_col,
+                },
+                Position {
+                    row: self.cursor_row,
+                    col: self.cursor_col + 1,
+                },
+            );
             let remove_at = char_to_byte(&self.lines[self.cursor_row], self.cursor_col);
             self.lines[self.cursor_row].remove(remove_at);
             self.dirty = true;
         } else if self.cursor_row + 1 < self.lines.len() {
+            self.shift_diagnostics_for_delete(
+                Position {
+                    row: self.cursor_row,
+                    col: self.line_len(self.cursor_row),
+                },
+                Position {
+                    row: self.cursor_row + 1,
+                    col: 0,
+                },
+            );
             let next = self.lines.remove(self.cursor_row + 1);
             self.lines[self.cursor_row].push_str(&next);
             self.dirty = true;
@@ -576,9 +671,17 @@ impl Editor {
         self.capture_undo_state();
         self.clear_selection();
         if self.lines.len() == 1 {
+            self.diagnostics.retain(|diagnostic| diagnostic.row != 0);
             self.lines[0].clear();
             self.cursor_col = 0;
         } else {
+            let removed_row = self.cursor_row;
+            self.diagnostics.retain(|diagnostic| diagnostic.row != removed_row);
+            for diagnostic in &mut self.diagnostics {
+                if diagnostic.row > removed_row {
+                    diagnostic.row -= 1;
+                }
+            }
             self.lines.remove(self.cursor_row);
             self.cursor_row = self.cursor_row.min(self.lines.len() - 1);
             self.clamp_col();
@@ -596,6 +699,7 @@ impl Editor {
         self.push_redo_state();
 
         self.lines = state.lines;
+        self.diagnostics = state.diagnostics;
         self.cursor_row = state.cursor_row;
         self.cursor_col = state.cursor_col;
         self.preferred_visual_col = None;
@@ -616,6 +720,7 @@ impl Editor {
         self.push_undo_state();
 
         self.lines = state.lines;
+        self.diagnostics = state.diagnostics;
         self.cursor_row = state.cursor_row;
         self.cursor_col = state.cursor_col;
         self.preferred_visual_col = None;
@@ -830,6 +935,7 @@ impl Editor {
     fn snapshot(&self) -> UndoState {
         UndoState {
             lines: self.lines.clone(),
+            diagnostics: self.diagnostics.clone(),
             cursor_row: self.cursor_row,
             cursor_col: self.cursor_col,
             row_offset: self.row_offset,
@@ -853,6 +959,7 @@ impl Editor {
 
         let (lines, binary_size) = read_buffer_from_path(&path)?;
         self.lines = lines;
+        self.diagnostics.clear();
         self.binary_size = binary_size;
         self.read_only = binary_size.is_some();
         self.fully_loaded = true;
@@ -905,10 +1012,14 @@ impl Editor {
             .unwrap_or(0)
     }
 
+    fn line_visual_rows(&self, row: usize, cols: usize) -> usize {
+        wrapped_rows(self.line_len(row), cols) + self.diagnostics_for_row(row).len()
+    }
+
     fn abs_visual_row(&self, row: usize, segment: usize, cols: usize) -> usize {
         let mut abs = 0;
         for idx in 0..row.min(self.lines.len()) {
-            abs += wrapped_rows(self.line_len(idx), cols);
+            abs += self.line_visual_rows(idx, cols);
         }
 
         let max_segment = wrapped_rows(self.line_len(row), cols).saturating_sub(1);
@@ -917,16 +1028,103 @@ impl Editor {
 
     fn visual_row_to_offset(&self, mut abs: usize, cols: usize) -> (usize, usize) {
         for row in 0..self.lines.len() {
-            let rows = wrapped_rows(self.line_len(row), cols);
-            if abs < rows {
+            let text_rows = wrapped_rows(self.line_len(row), cols);
+            if abs < text_rows {
                 return (row, abs);
             }
-            abs -= rows;
+
+            let diagnostic_rows = self.diagnostics_for_row(row).len();
+            if abs < text_rows + diagnostic_rows {
+                let next_row = (row + 1).min(self.lines.len().saturating_sub(1));
+                return (next_row, 0);
+            }
+
+            abs -= text_rows + diagnostic_rows;
         }
 
         let last_row = self.lines.len().saturating_sub(1);
         let last_segment = wrapped_rows(self.line_len(last_row), cols).saturating_sub(1);
         (last_row, last_segment)
+    }
+
+    fn shift_diagnostics_for_insert(
+        &mut self,
+        row: usize,
+        col: usize,
+        inserted_cols: usize,
+        inserted_lines: usize,
+        trailing_cols: usize,
+    ) {
+        for diagnostic in &mut self.diagnostics {
+            if diagnostic.row < row {
+                continue;
+            }
+
+            if diagnostic.row == row {
+                if inserted_lines == 0 {
+                    if diagnostic.col >= col {
+                        diagnostic.col += inserted_cols;
+                    }
+                    continue;
+                }
+
+                if diagnostic.col >= col {
+                    diagnostic.row += inserted_lines;
+                    diagnostic.col = trailing_cols + diagnostic.col.saturating_sub(col);
+                    continue;
+                }
+            }
+
+            diagnostic.row += inserted_lines;
+        }
+    }
+
+    fn shift_diagnostics_for_delete(&mut self, start: Position, end: Position) {
+        if end < start {
+            return;
+        }
+
+        let mut updated = Vec::with_capacity(self.diagnostics.len());
+        for mut diagnostic in self.diagnostics.drain(..) {
+            if diagnostic.row < start.row {
+                updated.push(diagnostic);
+                continue;
+            }
+
+            if start.row == end.row {
+                if diagnostic.row > end.row {
+                    updated.push(diagnostic);
+                    continue;
+                }
+
+                if diagnostic.col >= end.col {
+                    diagnostic.col -= end.col - start.col;
+                } else if diagnostic.col >= start.col {
+                    diagnostic.col = start.col;
+                }
+                updated.push(diagnostic);
+                continue;
+            }
+
+            if diagnostic.row > end.row {
+                diagnostic.row -= end.row - start.row;
+                updated.push(diagnostic);
+                continue;
+            }
+
+            if diagnostic.row == end.row && diagnostic.col >= end.col {
+                diagnostic.row = start.row;
+                diagnostic.col = start.col + diagnostic.col - end.col;
+                updated.push(diagnostic);
+                continue;
+            }
+
+            if diagnostic.row == start.row && diagnostic.col < start.col {
+                updated.push(diagnostic);
+            }
+        }
+
+        self.diagnostics = updated;
     }
 }
 
@@ -1017,7 +1215,7 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use super::{Editor, SaveOutcome, is_binary_bytes};
+    use super::{DiagnosticMessage, Editor, SaveOutcome, is_binary_bytes};
 
     static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -1250,6 +1448,42 @@ mod tests {
         assert_eq!(editor.cursor_row(), 0);
         assert_eq!(editor.cursor_col(), 5);
         assert_eq!(editor.selected_text().as_deref(), Some("bcde"));
+    }
+
+    #[test]
+    fn diagnostics_move_down_when_inserting_line_above() {
+        let mut editor = Editor::scratch();
+        editor.insert_text("alpha\nbeta");
+        editor.set_diagnostics(vec![DiagnosticMessage {
+            row: 1,
+            col: 0,
+            message: "problem".to_string(),
+        }]);
+
+        editor.set_cursor(0, 0);
+        editor.insert_newline();
+
+        let diagnostics = editor.diagnostics_for_row(2);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].message, "problem");
+    }
+
+    #[test]
+    fn diagnostics_follow_split_within_same_line() {
+        let mut editor = Editor::scratch();
+        editor.insert_text("abcdef");
+        editor.set_diagnostics(vec![DiagnosticMessage {
+            row: 0,
+            col: 4,
+            message: "problem".to_string(),
+        }]);
+
+        editor.set_cursor(0, 2);
+        editor.insert_newline();
+
+        let diagnostics = editor.diagnostics_for_row(1);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].col, 2);
     }
 
     #[test]

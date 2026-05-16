@@ -14,7 +14,7 @@ use regex::Regex;
 use ratatui::layout::Rect;
 
 use crate::{
-    editor::{Editor, SaveOutcome},
+    editor::{DiagnosticMessage, Editor, SaveOutcome},
     file_types::{ToolInvocation, detect_file_type},
     project::{
         ProjectEntry, ProjectEntryKind, directory_subtree_lines_with_size, format_byte_size,
@@ -981,18 +981,60 @@ impl App {
 
     pub fn build_current_target(&mut self) {
         self.close_menu();
+        self.editor.clear_diagnostics();
         if self.editor.is_dirty() {
             self.save_current();
         }
 
-        let Some(path) = self.editor.path() else {
+        let Some(path) = self.editor.path().map(Path::to_path_buf) else {
             self.status = "Build needs a saved file".to_string();
             return;
         };
 
-        let cwd = path.parent().unwrap_or(self.browsers[0].dir.as_path());
+        let cwd = path.parent().unwrap_or(self.browsers[0].dir.as_path()).to_path_buf();
 
-        let Some(spec) = detect_file_type(Some(path), self.editor.lines().first().map(String::as_str)) else {
+        let compile_script = cwd.join("compile.sh");
+        if compile_script.is_file() {
+            self.log_message(format!("Running {}", compile_script.display()));
+            let result = run_compile_script(&cwd, &compile_script);
+            for line in result.output.lines() {
+                self.log_message(line.to_string());
+            }
+
+            let diagnostics = parse_build_diagnostics(&result.output, &path);
+            let diagnostic_count = diagnostics.len();
+            self.editor.set_diagnostics(diagnostics);
+            self.request_full_redraw();
+            self.status = match result.exit_code {
+                Some(0) if diagnostic_count == 0 => {
+                    format!("compile.sh finished with no diagnostics for {}", path.display())
+                }
+                Some(0) => {
+                    format!("compile.sh reported {diagnostic_count} diagnostic(s) for {}", path.display())
+                }
+                Some(code) if diagnostic_count == 0 => {
+                    format!("compile.sh exited with status {code} for {}", path.display())
+                }
+                Some(code) => {
+                    format!(
+                        "compile.sh exited with status {code} and reported {diagnostic_count} diagnostic(s) for {}",
+                        path.display()
+                    )
+                }
+                None if diagnostic_count == 0 => {
+                    format!("compile.sh terminated for {}", path.display())
+                }
+                None => {
+                    format!(
+                        "compile.sh terminated and reported {diagnostic_count} diagnostic(s) for {}",
+                        path.display()
+                    )
+                }
+            };
+            return;
+        }
+
+        let Some(spec) = detect_file_type(Some(&path), self.editor.lines().first().map(String::as_str)) else {
             let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or_default();
             self.status = if extension.is_empty() {
                 "Build is not configured for this file".to_string()
@@ -1007,9 +1049,9 @@ impl App {
             return;
         };
 
-        let (command, description) = format_tool_invocation(path, invocation);
+        let (command, description) = format_tool_invocation(&path, invocation);
 
-        match launch_in_interactive_terminal(cwd, &command) {
+        match launch_in_interactive_terminal(&cwd, &command) {
             Ok(()) => {
                 self.request_full_redraw();
                 self.status = format!("Launched {description} in external terminal");
@@ -3175,6 +3217,74 @@ fn shell_quote(path: &Path) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
+struct CompileScriptResult {
+    output: String,
+    exit_code: Option<i32>,
+}
+
+fn run_compile_script(cwd: &Path, script_path: &Path) -> CompileScriptResult {
+    let output = Command::new("sh")
+        .arg(script_path)
+        .current_dir(cwd)
+        .output();
+
+    match output {
+        Ok(output) => {
+            let mut combined = String::new();
+            combined.push_str(&String::from_utf8_lossy(&output.stdout));
+            combined.push_str(&String::from_utf8_lossy(&output.stderr));
+
+            CompileScriptResult {
+                output: combined,
+                exit_code: output.status.code(),
+            }
+        }
+        Err(error) => CompileScriptResult {
+            output: format!("compile.sh invocation failed: {error}"),
+            exit_code: None,
+        },
+    }
+}
+
+fn parse_build_diagnostics(output: &str, current_path: &Path) -> Vec<DiagnosticMessage> {
+    let Some(file_name) = current_path.file_name().and_then(|name| name.to_str()) else {
+        return Vec::new();
+    };
+
+    output
+        .lines()
+        .filter_map(|line| parse_build_diagnostic_line(line, file_name))
+        .collect()
+}
+
+fn parse_build_diagnostic_line(line: &str, current_file_name: &str) -> Option<DiagnosticMessage> {
+    let remainder = line.strip_prefix(current_file_name)?.strip_prefix(':')?;
+    let (row_text, remainder) = remainder.split_once(':')?;
+    let row = row_text.trim().parse::<usize>().ok()?.checked_sub(1)?;
+    let column_digits = remainder
+        .char_indices()
+        .take_while(|(_, character)| character.is_ascii_digit())
+        .last()
+        .map(|(index, character)| index + character.len_utf8())?;
+    let col = remainder[..column_digits]
+        .trim()
+        .parse::<usize>()
+        .ok()?
+        .checked_sub(1)?;
+    let message = remainder[column_digits..]
+        .trim_start_matches(':')
+        .trim();
+    if message.is_empty() {
+        return None;
+    }
+
+    Some(DiagnosticMessage {
+        row,
+        col,
+        message: message.to_string(),
+    })
+}
+
 fn format_tool_invocation(path: &Path, invocation: ToolInvocation) -> (String, String) {
     match invocation {
         ToolInvocation::Cargo { subcommand } => {
@@ -3312,7 +3422,12 @@ mod tests {
 
     use crossterm::event::{KeyCode, KeyEvent};
 
-    use super::{Action, App, Dialog, Focus, PendingUnsavedAction};
+    use std::path::Path;
+
+    use super::{
+        Action, App, Dialog, Focus, PendingUnsavedAction, parse_build_diagnostics,
+        run_compile_script,
+    };
 
     static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -3656,6 +3771,84 @@ mod tests {
         assert_eq!(app.dialog, None);
         assert_eq!(app.focus, Focus::BrowserPrimary);
         assert_eq!(app.browsers[0].dir, nested.canonicalize().expect("canonical nested path"));
+    }
+
+    #[test]
+    fn build_uses_compile_script_and_collects_matching_diagnostics() {
+        let test_dir = TestDir::new();
+        let source = test_dir.path().join("main.rs");
+        let compile = test_dir.path().join("compile.sh");
+        fs::write(&source, "fn main() {}\n").expect("write source file");
+        fs::write(
+            &compile,
+            "printf 'main.rs:1:1 first issue\\n'\nprintf 'other.rs:2:3 ignored\\n' >&2\nprintf 'main.rs:1:4 second issue\\n' >&2\n",
+        )
+        .expect("write compile script");
+
+        let mut app = App::new(test_dir.path().to_path_buf());
+        app.refresh_browser();
+        app.open_path(source.clone());
+
+        app.build_current_target();
+
+        let diagnostics = app.editor.diagnostics_for_row(0);
+        assert_eq!(diagnostics.len(), 2);
+        assert_eq!(diagnostics[0].message, "first issue");
+        assert_eq!(diagnostics[1].message, "second issue");
+    }
+
+    #[test]
+    fn parse_build_diagnostics_matches_current_file_name_only() {
+        let diagnostics = parse_build_diagnostics(
+            "main.rs:2:5 failed\nlib.rs:1:1 ignored",
+            Path::new("/tmp/main.rs"),
+        );
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].row, 1);
+        assert_eq!(diagnostics[0].col, 4);
+        assert_eq!(diagnostics[0].message, "failed");
+    }
+
+    #[test]
+    fn compile_script_output_is_available_on_failure() {
+        let test_dir = TestDir::new();
+        let compile = test_dir.path().join("compile.sh");
+        fs::write(
+            &compile,
+            "printf 'main.rs:3:7 broken\\n'\nprintf 'stderr details\\n' >&2\nexit 2\n",
+        )
+        .expect("write compile script");
+
+        let result = run_compile_script(test_dir.path(), &compile);
+
+        assert_eq!(result.exit_code, Some(2));
+        assert!(result.output.contains("main.rs:3:7 broken"));
+        assert!(result.output.contains("stderr details"));
+    }
+
+    #[test]
+    fn build_collects_diagnostics_even_when_compile_script_fails() {
+        let test_dir = TestDir::new();
+        let source = test_dir.path().join("main.rs");
+        let compile = test_dir.path().join("compile.sh");
+        fs::write(&source, "fn main() {}\n").expect("write source file");
+        fs::write(
+            &compile,
+            "printf 'main.rs:1:1 broken\\n'\nexit 2\n",
+        )
+        .expect("write compile script");
+
+        let mut app = App::new(test_dir.path().to_path_buf());
+        app.refresh_browser();
+        app.open_path(source);
+
+        app.build_current_target();
+
+        let diagnostics = app.editor.diagnostics_for_row(0);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].message, "broken");
+        assert!(app.status.contains("status 2"));
     }
 }
 
