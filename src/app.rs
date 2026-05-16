@@ -297,6 +297,7 @@ impl TextInputState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DragTarget {
     BrowserDivider(usize),
+    BrowserLogDivider,
     EditorSelection,
 }
 
@@ -308,6 +309,8 @@ pub struct Geometry {
     pub desktop_inner: Rect,
     pub browser_areas: [Rect; 2],
     pub browser_inners: [Rect; 2],
+    pub browser_log_area: Rect,
+    pub browser_log_divider_area: Rect,
     pub editor_area: Rect,
     pub editor_inner: Rect,
 }
@@ -362,6 +365,8 @@ pub struct App {
     pub selection_mode: bool,
     pub status: String,
     pub browser_pane_width: u16,
+    pub browser_log_height: u16,
+    pub log_scroll: usize,
     pub geometry: Geometry,
     preview_label: Option<String>,
     log_messages: VecDeque<String>,
@@ -416,6 +421,8 @@ impl App {
             selection_mode: false,
             status: "Ready".to_string(),
             browser_pane_width: 30,
+            browser_log_height: 0,
+            log_scroll: 0,
             geometry: Geometry::default(),
             preview_label: None,
             log_messages: VecDeque::new(),
@@ -628,16 +635,30 @@ impl App {
             .unwrap_or_else(|| "Untitled".to_string())
     }
 
-    pub fn log_lines(&self, max_lines: usize) -> Vec<String> {
+    pub fn log_lines_with_scroll(&self, max_lines: usize, scroll: usize) -> Vec<String> {
+        let total = self.log_messages.len();
+        let visible = max_lines.min(total);
+        let end = total.saturating_sub(scroll.min(total));
+        let start = end.saturating_sub(visible);
         self.log_messages
             .iter()
-            .rev()
-            .take(max_lines)
+            .skip(start)
+            .take(end.saturating_sub(start))
             .cloned()
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
             .collect()
+    }
+
+    pub fn scroll_log(&mut self, amount: isize, visible_lines: usize) {
+        let max_scroll = self.max_log_scroll(visible_lines);
+        if amount < 0 {
+            self.log_scroll = (self.log_scroll + amount.unsigned_abs()).min(max_scroll);
+        } else {
+            self.log_scroll = self.log_scroll.saturating_sub(amount as usize);
+        }
+    }
+
+    pub fn max_log_scroll(&self, visible_lines: usize) -> usize {
+        self.log_messages.len().saturating_sub(visible_lines)
     }
 
     pub fn save_file_dialog_title(&self) -> &'static str {
@@ -1664,6 +1685,12 @@ impl App {
             return Action::None;
         }
 
+        if self.browser_log_divider_at(column, row) {
+            self.drag_target = Some(DragTarget::BrowserLogDivider);
+            self.resize_browser_log_pane(row);
+            return Action::None;
+        }
+
         if let Some(browser_index) = self.browser_inner_at(column, row) {
             self.assign_focus(Self::focus_for_browser_index(browser_index));
             self.select_entry_at(browser_index, row);
@@ -1687,6 +1714,7 @@ impl App {
             Some(DragTarget::BrowserDivider(divider_index)) => {
                 self.resize_browser_pane(divider_index, column)
             }
+            Some(DragTarget::BrowserLogDivider) => self.resize_browser_log_pane(row),
             Some(DragTarget::EditorSelection) => self.place_cursor_at(column, row, true),
             None => {}
         }
@@ -1697,7 +1725,10 @@ impl App {
             return;
         }
 
-        if let Some(browser_index) = self.browser_inner_at(column, row) {
+        if contains(self.geometry.browser_log_area, column, row) {
+            let visible_lines = self.geometry.browser_log_area.height.saturating_sub(1) as usize;
+            self.scroll_log(amount, visible_lines);
+        } else if let Some(browser_index) = self.browser_inner_at(column, row) {
             self.assign_focus(Self::focus_for_browser_index(browser_index));
             if amount < 0 {
                 for _ in 0..amount.unsigned_abs() {
@@ -2672,6 +2703,8 @@ impl App {
         while self.log_messages.len() > LOG_HISTORY_LIMIT {
             self.log_messages.pop_front();
         }
+        let visible_lines = self.geometry.browser_log_area.height.saturating_sub(1) as usize;
+        self.log_scroll = self.log_scroll.min(self.max_log_scroll(visible_lines));
     }
 
     fn select_entry_at(&mut self, browser_index: usize, row: u16) {
@@ -2760,6 +2793,10 @@ impl App {
         None
     }
 
+    fn browser_log_divider_at(&self, column: u16, row: u16) -> bool {
+        contains(self.geometry.browser_log_divider_area, column, row)
+    }
+
     fn request_unsaved_action(&mut self, action: PendingUnsavedAction) {
         let action_label = match &action {
             PendingUnsavedAction::Quit => "exit",
@@ -2823,6 +2860,22 @@ impl App {
 
         self.browser_pane_width = width;
         self.status = format!("Files pane: {width} columns");
+    }
+
+    fn resize_browser_log_pane(&mut self, row: u16) {
+        let browser_area = self.geometry.browser_areas[0];
+        if browser_area.height == 0 {
+            return;
+        }
+
+        let divider_height = self.geometry.browser_log_divider_area.height.max(1);
+        let log_top = row.saturating_add(divider_height).max(browser_area.y.saturating_add(1));
+        let desired_height = browser_area
+            .y
+            .saturating_add(browser_area.height)
+            .saturating_sub(log_top);
+        self.browser_log_height = clamp_browser_log_height(browser_area.height, desired_height);
+        self.status = format!("Log pane: {} rows", self.browser_log_height);
     }
 
     pub fn visible_browser_count(&self) -> usize {
@@ -3130,6 +3183,15 @@ fn contains_x(area: Rect, column: u16) -> bool {
 
 fn contains_y(area: Rect, row: u16) -> bool {
     row >= area.y && row < area.y.saturating_add(area.height)
+}
+
+fn clamp_browser_log_height(total_height: u16, preferred: u16) -> u16 {
+    preferred.clamp(1, total_height)
+}
+
+#[cfg(test)]
+fn default_browser_log_height(total_height: u16) -> u16 {
+    total_height.max(1).div_ceil(3)
 }
 
 fn first_selectable_item(menu_index: usize) -> usize {
@@ -3547,7 +3609,8 @@ mod tests {
 
     use super::{
         Action, App, Dialog, Focus, PendingUnsavedAction, extract_stainless_counterexample,
-        parse_build_diagnostics, run_compile_script,
+        parse_build_diagnostics, run_compile_script, clamp_browser_log_height,
+        default_browser_log_height,
     };
 
     static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -4097,9 +4160,34 @@ Optionally.scala:6:10:                  f   postcondition           invalid     
         assert_eq!(app.confirm_save_file_dialog(true), Action::None);
 
         assert!(app
-            .log_lines(20)
+            .log_lines_with_scroll(20, 0)
             .iter()
             .any(|line| line.contains("Diagnostic") && line.contains("broken")));
+    }
+
+    #[test]
+    fn browser_log_height_is_clamped_to_title_only_or_more() {
+        assert_eq!(clamp_browser_log_height(24, 0), 1);
+        assert_eq!(clamp_browser_log_height(24, 12), 12);
+        assert_eq!(clamp_browser_log_height(24, 40), 24);
+    }
+
+    #[test]
+    fn browser_log_height_default_uses_one_third_initial_value() {
+        assert_eq!(default_browser_log_height(24), 8);
+        assert_eq!(default_browser_log_height(2), 1);
+    }
+
+    #[test]
+    fn log_lines_support_scrolling_backwards() {
+        let mut app = App::new(PathBuf::from("."));
+        app.log_message("one".to_string());
+        app.log_message("two".to_string());
+        app.log_message("three".to_string());
+        app.log_message("four".to_string());
+
+        assert_eq!(app.log_lines_with_scroll(2, 0), vec!["three", "four"]);
+        assert_eq!(app.log_lines_with_scroll(2, 1), vec!["two", "three"]);
     }
 }
 

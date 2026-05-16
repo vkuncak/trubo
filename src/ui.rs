@@ -499,6 +499,8 @@ fn draw_desktop(frame: &mut Frame, area: Rect, app: &mut App) {
     app.geometry.desktop_inner = desktop;
     app.geometry.browser_areas = [Rect::default(); 2];
     app.geometry.browser_inners = [Rect::default(); 2];
+    app.geometry.browser_log_area = Rect::default();
+    app.geometry.browser_log_divider_area = Rect::default();
 
     if app.editor_only_mode {
         app.geometry.editor_area = desktop;
@@ -557,10 +559,19 @@ fn draw_desktop(frame: &mut Frame, area: Rect, app: &mut App) {
 
 fn draw_browser(frame: &mut Frame, area: Rect, app: &mut App, browser_index: usize, show_log: bool) {
     let list_panel = if show_log {
+        if app.browser_log_height == 0 {
+            app.browser_log_height = default_browser_log_height(area.height);
+        }
+        let log_height = clamp_browser_log_height(area.height, app.browser_log_height);
+        app.browser_log_height = log_height;
         let split = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(6), Constraint::Length(6)])
+            .constraints([
+                Constraint::Min(0),
+                Constraint::Length(log_height.min(area.height)),
+            ])
             .split(area);
+        app.geometry.browser_log_area = split[1];
         draw_browser_log(frame, split[1], app);
         split[0]
     } else {
@@ -688,11 +699,13 @@ fn draw_browser(frame: &mut Frame, area: Rect, app: &mut App, browser_index: usi
     );
 }
 
-fn draw_browser_log(frame: &mut Frame, area: Rect, app: &App) {
+fn draw_browser_log(frame: &mut Frame, area: Rect, app: &mut App) {
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(0)])
         .split(area);
+
+    app.geometry.browser_log_divider_area = sections[0];
 
     frame.render_widget(
         Paragraph::new(" Log ").style(
@@ -710,7 +723,7 @@ fn draw_browser_log(frame: &mut Frame, area: Rect, app: &App) {
     );
 
     let mut log_lines = app
-        .log_lines(sections[1].height as usize)
+        .log_lines_with_scroll(sections[1].height as usize, app.log_scroll)
         .into_iter()
         .map(|line| {
             Line::from(Span::styled(
@@ -737,6 +750,14 @@ fn draw_browser_log(frame: &mut Frame, area: Rect, app: &App) {
             .wrap(Wrap { trim: false }),
         sections[1],
     );
+}
+
+fn clamp_browser_log_height(total_height: u16, preferred: u16) -> u16 {
+    preferred.clamp(1, total_height)
+}
+
+fn default_browser_log_height(total_height: u16) -> u16 {
+    total_height.max(1).div_ceil(3)
 }
 
 fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
