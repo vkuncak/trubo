@@ -3453,7 +3453,7 @@ fn extract_stainless_counterexample(lines: &[&str], diagnostic_index: usize) -> 
         }
     }
 
-    (!values.is_empty()).then(|| format!("Counterexample:\n{}", values.join("\n")))
+    (!values.is_empty()).then(|| format!("Counterexample:\n {}", values.join("\n ")))
 }
 
 fn normalize_stainless_line(line: &str) -> &str {

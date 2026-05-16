@@ -48,6 +48,7 @@ struct Theme {
     editor_identifier_fg: Color,
     editor_line_number_fg: Color,
     editor_line_number_bg: Color,
+    editor_diagnostic_gutter_bg: Color,
     editor_current_line_bg: Color,
     editor_selection_bg: Color,
 }
@@ -88,6 +89,7 @@ const CURRENT_THEME: Theme = Theme {
     editor_identifier_fg: Color::Rgb(0, 5, 0),
     editor_line_number_fg: Color::Rgb(0, 60, 0),
     editor_line_number_bg: Color::Rgb(200, 200, 200),
+    editor_diagnostic_gutter_bg: Color::Rgb(255, 190, 190),
     editor_current_line_bg: Color::Rgb(234, 230, 169),
     editor_selection_bg: Color::Rgb(180, 240, 240),
 };
@@ -855,19 +857,22 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
 
                     let mut spans = Vec::new();
                     spans.push(Span::styled(
-                        " ".repeat(line_number_width as usize),
+                        if line_index == 0 {
+                            format!("{}!", " ".repeat(line_number_width.saturating_sub(1) as usize))
+                        } else {
+                            " ".repeat(line_number_width as usize)
+                        },
                         Style::default()
                             .fg(CURRENT_THEME.editor_line_number_fg)
-                            .bg(CURRENT_THEME.editor_text_bg),
+                            .bg(CURRENT_THEME.editor_diagnostic_gutter_bg),
                     ));
-                    let prefix = if line_index == 0 { "! " } else { "  " };
-                    spans.push(Span::styled(
-                        format!("{prefix}{diagnostic_line}"),
-                        Style::default()
-                            .fg(CURRENT_THEME.status_hotkey_fg)
-                            .bg(CURRENT_THEME.editor_text_bg)
-                            .add_modifier(Modifier::BOLD),
-                    ));
+                        spans.push(Span::styled(
+                            diagnostic_line.to_string(),
+                            Style::default()
+                                .fg(CURRENT_THEME.status_hotkey_fg)
+                                .bg(CURRENT_THEME.editor_text_bg)
+                                .add_modifier(Modifier::BOLD),
+                        ));
                     lines.push(Line::from(spans));
                 }
             }
