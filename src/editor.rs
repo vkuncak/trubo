@@ -212,6 +212,13 @@ impl Editor {
         &self.diagnostics[start..end]
     }
 
+    pub fn diagnostic_visual_rows_for_row(&self, row: usize) -> usize {
+        self.diagnostics_for_row(row)
+            .iter()
+            .map(|diagnostic| diagnostic.message.lines().count().max(1))
+            .sum()
+    }
+
     pub fn set_diagnostics(&mut self, mut diagnostics: Vec<DiagnosticMessage>) {
         diagnostics.sort_by(|left, right| {
             left.row
@@ -1013,7 +1020,7 @@ impl Editor {
     }
 
     fn line_visual_rows(&self, row: usize, cols: usize) -> usize {
-        wrapped_rows(self.line_len(row), cols) + self.diagnostics_for_row(row).len()
+        wrapped_rows(self.line_len(row), cols) + self.diagnostic_visual_rows_for_row(row)
     }
 
     fn abs_visual_row(&self, row: usize, segment: usize, cols: usize) -> usize {
@@ -1033,7 +1040,7 @@ impl Editor {
                 return (row, abs);
             }
 
-            let diagnostic_rows = self.diagnostics_for_row(row).len();
+            let diagnostic_rows = self.diagnostic_visual_rows_for_row(row);
             if abs < text_rows + diagnostic_rows {
                 let next_row = (row + 1).min(self.lines.len().saturating_sub(1));
                 return (next_row, 0);

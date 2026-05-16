@@ -827,25 +827,28 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
             }
 
             for diagnostic in app.editor.diagnostics_for_row(file_row) {
-                if lines.len() >= text_rows {
-                    break;
-                }
+                for (line_index, diagnostic_line) in diagnostic.message.lines().enumerate() {
+                    if lines.len() >= text_rows {
+                        break;
+                    }
 
-                let mut spans = Vec::new();
-                spans.push(Span::styled(
-                    " ".repeat(line_number_width as usize),
-                    Style::default()
-                        .fg(CURRENT_THEME.editor_line_number_fg)
-                        .bg(CURRENT_THEME.editor_text_bg),
-                ));
-                spans.push(Span::styled(
-                    format!("! {}", diagnostic.message),
-                    Style::default()
-                        .fg(CURRENT_THEME.status_hotkey_fg)
-                        .bg(CURRENT_THEME.editor_text_bg)
-                        .add_modifier(Modifier::BOLD),
-                ));
-                lines.push(Line::from(spans));
+                    let mut spans = Vec::new();
+                    spans.push(Span::styled(
+                        " ".repeat(line_number_width as usize),
+                        Style::default()
+                            .fg(CURRENT_THEME.editor_line_number_fg)
+                            .bg(CURRENT_THEME.editor_text_bg),
+                    ));
+                    let prefix = if line_index == 0 { "! " } else { "  " };
+                    spans.push(Span::styled(
+                        format!("{prefix}{diagnostic_line}"),
+                        Style::default()
+                            .fg(CURRENT_THEME.status_hotkey_fg)
+                            .bg(CURRENT_THEME.editor_text_bg)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                    lines.push(Line::from(spans));
+                }
             }
 
             segment_offset = 0;
@@ -909,7 +912,7 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
                 .unwrap_or(1);
             visual_from_top += first_wrapped
                 .saturating_sub(app.editor.row_segment_offset())
-                + app.editor.diagnostics_for_row(row_offset).len();
+                + app.editor.diagnostic_visual_rows_for_row(row_offset);
             visual_from_top += (row_offset + 1..app.editor.cursor_row())
                 .map(|row| {
                     let wrapped = app
@@ -918,7 +921,7 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &mut App) {
                         .get(row)
                         .map(|line| wrapped_rows(line.chars().count(), text_cols))
                         .unwrap_or(1);
-                    wrapped + app.editor.diagnostics_for_row(row).len()
+                    wrapped + app.editor.diagnostic_visual_rows_for_row(row)
                 })
                 .sum::<usize>();
             visual_from_top += cursor_segment;

@@ -3251,10 +3251,41 @@ fn parse_build_diagnostics(output: &str, current_path: &Path) -> Vec<DiagnosticM
         return Vec::new();
     };
 
-    output
-        .lines()
-        .filter_map(|line| parse_build_diagnostic_line(line, file_name))
-        .collect()
+    let is_scala_file = current_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("scala"));
+
+    let lines = output.lines().collect::<Vec<_>>();
+    let mut diagnostics = Vec::new();
+
+    for (index, line) in lines.iter().enumerate() {
+        let Some(mut diagnostic) = parse_build_diagnostic_line(line, file_name) else {
+            continue;
+        };
+
+        if is_scala_file
+            && diagnostic.message.contains("INVALID")
+            && let Some(counterexample) = extract_stainless_counterexample(&lines, index)
+        {
+            diagnostic.message = counterexample;
+        }
+
+        if is_scala_file
+            && is_stainless_invalid_summary(&diagnostic.message)
+            && diagnostics.iter().any(|existing: &DiagnosticMessage| {
+                existing.row == diagnostic.row
+                    && existing.col == diagnostic.col
+                    && existing.message.starts_with("Counterexample:\n")
+            })
+        {
+            continue;
+        }
+
+        diagnostics.push(diagnostic);
+    }
+
+    diagnostics
 }
 
 fn parse_build_diagnostic_line(line: &str, current_file_name: &str) -> Option<DiagnosticMessage> {
@@ -3283,6 +3314,57 @@ fn parse_build_diagnostic_line(line: &str, current_file_name: &str) -> Option<Di
         col,
         message: message.to_string(),
     })
+}
+
+fn extract_stainless_counterexample(lines: &[&str], diagnostic_index: usize) -> Option<String> {
+    let search_end = (diagnostic_index + 5).min(lines.len());
+    let mut found_index = None;
+
+    for (index, line) in lines
+        .iter()
+        .enumerate()
+        .take(search_end)
+        .skip(diagnostic_index + 1)
+    {
+        if normalize_stainless_line(line) == "Found counter-example:" {
+            found_index = Some(index);
+            break;
+        }
+    }
+
+    let found_index = found_index?;
+    let collect_end = (found_index + 5).min(lines.len());
+    let mut values = Vec::new();
+
+    for line in lines.iter().take(collect_end).skip(found_index + 1) {
+        let normalized = normalize_stainless_line(line);
+        if normalized.is_empty() {
+            continue;
+        }
+
+        if normalized.contains("->") {
+            values.push(normalized.to_string());
+            continue;
+        }
+
+        if !values.is_empty() {
+            break;
+        }
+    }
+
+    (!values.is_empty()).then(|| format!("Counterexample:\n{}", values.join("\n")))
+}
+
+fn normalize_stainless_line(line: &str) -> &str {
+    line.trim_start()
+        .strip_prefix("warning:")
+        .unwrap_or(line)
+        .trim_start()
+}
+
+fn is_stainless_invalid_summary(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    normalized.contains(" invalid") && !normalized.contains("=> invalid")
 }
 
 fn format_tool_invocation(path: &Path, invocation: ToolInvocation) -> (String, String) {
@@ -3425,8 +3507,8 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        Action, App, Dialog, Focus, PendingUnsavedAction, parse_build_diagnostics,
-        run_compile_script,
+        Action, App, Dialog, Focus, PendingUnsavedAction, extract_stainless_counterexample,
+        parse_build_diagnostics, run_compile_script,
     };
 
     static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -3808,6 +3890,76 @@ mod tests {
         assert_eq!(diagnostics[0].row, 1);
         assert_eq!(diagnostics[0].col, 4);
         assert_eq!(diagnostics[0].message, "failed");
+    }
+
+    #[test]
+    fn extracts_stainless_counterexample_from_following_lines() {
+        let lines = [
+            "Optionally.scala:7:5: warning:  => INVALID",
+            "           def f(x: Int, y: Int): Int = {",
+            "               ^",
+            "warning: Found counter-example:",
+            "warning:   x: Int -> 2147418111",
+            "  y: Int -> 1073807364",
+        ];
+
+        let counterexample = extract_stainless_counterexample(&lines, 0).expect("counterexample");
+
+        assert_eq!(
+            counterexample,
+            "Counterexample:\nx: Int -> 2147418111\ny: Int -> 1073807364"
+        );
+    }
+
+    #[test]
+    fn parse_build_diagnostics_appends_stainless_counterexample_for_scala() {
+        let diagnostics = parse_build_diagnostics(
+            "info Finished generating VCs\n\
+Optionally.scala:7:5: warning:  => INVALID\n\
+           def f(x: Int, y: Int): Int = {\n\
+               ^\n\
+warning: Found counter-example:\n\
+warning:   x: Int -> 2147418111\n\
+  y: Int -> 1073807364\n",
+            Path::new("/tmp/Optionally.scala"),
+        );
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].message,
+            "Counterexample:\nx: Int -> 2147418111\ny: Int -> 1073807364"
+        );
+    }
+
+    #[test]
+    fn parse_build_diagnostics_does_not_append_counterexample_for_non_scala() {
+        let diagnostics = parse_build_diagnostics(
+            "main.rs:7:5: warning:  => INVALID\n\
+warning: Found counter-example:\n\
+warning:   x: Int -> 1\n",
+            Path::new("/tmp/main.rs"),
+        );
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].message, "warning:  => INVALID");
+    }
+
+    #[test]
+    fn parse_build_diagnostics_skips_redundant_stainless_invalid_summary() {
+        let diagnostics = parse_build_diagnostics(
+            "Optionally.scala:6:10: warning:  => INVALID\n\
+warning: Found counter-example:\n\
+warning:   x: Int -> 2147418111\n\
+  y: Int -> 1073807364\n\
+Optionally.scala:6:10:                  f   postcondition           invalid       U:smt-z3       0.1\n",
+            Path::new("/tmp/Optionally.scala"),
+        );
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].message,
+            "Counterexample:\nx: Int -> 2147418111\ny: Int -> 1073807364"
+        );
     }
 
     #[test]
