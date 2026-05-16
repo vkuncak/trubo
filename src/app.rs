@@ -182,6 +182,7 @@ enum PendingUnsavedAction {
     Quit,
     Focus(Focus),
     OpenPath { path: PathBuf, browser_index: usize },
+    Build,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -644,6 +645,7 @@ impl App {
             Some(PendingUnsavedAction::Quit) => "Save File Before Exiting?",
             Some(PendingUnsavedAction::Focus(_)) => "Save File Before Changing Pane?",
             Some(PendingUnsavedAction::OpenPath { .. }) => "Save File Before Opening Another File?",
+            Some(PendingUnsavedAction::Build) => "Save File Before Building?",
             None => "Save File?",
         }
     }
@@ -653,6 +655,7 @@ impl App {
             Some(PendingUnsavedAction::Quit) => " = Save and exit",
             Some(PendingUnsavedAction::Focus(_)) => " = Save and change pane",
             Some(PendingUnsavedAction::OpenPath { .. }) => " = Save and open file",
+            Some(PendingUnsavedAction::Build) => " = Save and build",
             None => " = Save",
         }
     }
@@ -662,6 +665,7 @@ impl App {
             Some(PendingUnsavedAction::Quit) => " = Exit without saving, changes lost!",
             Some(PendingUnsavedAction::Focus(_)) => " = Change pane without saving",
             Some(PendingUnsavedAction::OpenPath { .. }) => " = Open without saving, changes lost!",
+            Some(PendingUnsavedAction::Build) => " = Abort save and compilation",
             None => " = Continue without saving",
         }
     }
@@ -671,6 +675,7 @@ impl App {
             Some(PendingUnsavedAction::Quit) => " = Stay in application and continue editing",
             Some(PendingUnsavedAction::Focus(_)) => " = Stay in editor and continue editing",
             Some(PendingUnsavedAction::OpenPath { .. }) => " = Stay on current file and continue editing",
+            Some(PendingUnsavedAction::Build) => " = Abort save and compilation",
             None => " = Continue editing",
         }
     }
@@ -981,10 +986,16 @@ impl App {
 
     pub fn build_current_target(&mut self) {
         self.close_menu();
-        self.editor.clear_diagnostics();
         if self.editor.is_dirty() {
-            self.save_current();
+            self.request_unsaved_action(PendingUnsavedAction::Build);
+            return;
         }
+
+        self.perform_build_current_target();
+    }
+
+    fn perform_build_current_target(&mut self) {
+        self.editor.clear_diagnostics();
 
         let Some(path) = self.editor.path().map(Path::to_path_buf) else {
             self.status = "Build needs a saved file".to_string();
@@ -1003,6 +1014,7 @@ impl App {
 
             let diagnostics = parse_build_diagnostics(&result.output, &path);
             let diagnostic_count = diagnostics.len();
+            self.log_diagnostics(&path, &diagnostics);
             self.editor.set_diagnostics(diagnostics);
             self.request_full_redraw();
             self.status = match result.exit_code {
@@ -1058,6 +1070,24 @@ impl App {
             }
             Err(error) => {
                 self.status = format!("Build launch failed: {error}");
+            }
+        }
+    }
+
+    fn log_diagnostics(&mut self, path: &Path, diagnostics: &[DiagnosticMessage]) {
+        for diagnostic in diagnostics {
+            for (index, line) in diagnostic.message.lines().enumerate() {
+                if index == 0 {
+                    self.log_message(format!(
+                        "Diagnostic {}:{}:{} {}",
+                        path.display(),
+                        diagnostic.row + 1,
+                        diagnostic.col + 1,
+                        line
+                    ));
+                } else {
+                    self.log_message(format!("  {line}"));
+                }
             }
         }
     }
@@ -2735,6 +2765,7 @@ impl App {
             PendingUnsavedAction::Quit => "exit",
             PendingUnsavedAction::Focus(_) => "change pane",
             PendingUnsavedAction::OpenPath { .. } => "open another file",
+            PendingUnsavedAction::Build => "build",
         };
         self.pending_unsaved_action = Some(action);
         self.dialog = Some(Dialog::SaveFile);
@@ -2755,6 +2786,14 @@ impl App {
             }
             Some(PendingUnsavedAction::OpenPath { path, browser_index }) => {
                 self.apply_open_path(browser_index, path);
+                Action::None
+            }
+            Some(PendingUnsavedAction::Build) => {
+                if save {
+                    self.perform_build_current_target();
+                } else {
+                    self.status = "Build cancelled".to_string();
+                }
                 Action::None
             }
             None => Action::None,
@@ -4001,6 +4040,66 @@ Optionally.scala:6:10:                  f   postcondition           invalid     
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].message, "broken");
         assert!(app.status.contains("status 2"));
+    }
+
+    #[test]
+    fn build_prompts_to_save_when_buffer_is_dirty() {
+        let test_dir = TestDir::new();
+        let source = test_dir.path().join("main.rs");
+        fs::write(&source, "fn main() {}\n").expect("write source file");
+
+        let mut app = App::new(test_dir.path().to_path_buf());
+        app.refresh_browser();
+        app.open_path(source);
+        app.editor.insert_char('!');
+
+        app.build_current_target();
+
+        assert_eq!(app.dialog, Some(Dialog::SaveFile));
+        assert!(matches!(app.pending_unsaved_action, Some(PendingUnsavedAction::Build)));
+    }
+
+    #[test]
+    fn declining_build_save_aborts_compilation() {
+        let test_dir = TestDir::new();
+        let source = test_dir.path().join("main.rs");
+        let compile = test_dir.path().join("compile.sh");
+        fs::write(&source, "fn main() {}\n").expect("write source file");
+        fs::write(&compile, "printf 'main.rs:1:1 broken\\n'\n").expect("write compile script");
+
+        let mut app = App::new(test_dir.path().to_path_buf());
+        app.refresh_browser();
+        app.open_path(source);
+        app.editor.insert_char('!');
+
+        app.build_current_target();
+        assert_eq!(app.confirm_save_file_dialog(false), Action::None);
+
+        assert_eq!(app.dialog, None);
+        assert!(app.editor.diagnostics_for_row(0).is_empty());
+        assert_eq!(app.status, "Build cancelled");
+    }
+
+    #[test]
+    fn build_logs_diagnostics_after_successful_save() {
+        let test_dir = TestDir::new();
+        let source = test_dir.path().join("main.rs");
+        let compile = test_dir.path().join("compile.sh");
+        fs::write(&source, "fn main() {}\n").expect("write source file");
+        fs::write(&compile, "printf 'main.rs:1:1 broken\\n'\n").expect("write compile script");
+
+        let mut app = App::new(test_dir.path().to_path_buf());
+        app.refresh_browser();
+        app.open_path(source);
+        app.editor.insert_char('!');
+
+        app.build_current_target();
+        assert_eq!(app.confirm_save_file_dialog(true), Action::None);
+
+        assert!(app
+            .log_lines(20)
+            .iter()
+            .any(|line| line.contains("Diagnostic") && line.contains("broken")));
     }
 }
 
